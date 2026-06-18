@@ -1,0 +1,35 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: elizade
+      POSTGRES_PASSWORD: elizade
+      POSTGRES_DB: elizade_connect
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U elizade -d elizade_connect"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg2://elizade:elizade@db:5432/elizade_connect
+      JWT_SECRET: change-me-in-production-use-long-random-string
+      JWT_EXPIRE_MINUTES: "10080"
+      ADMIN_PHONE_NORMALIZED: "8107891549"
+      OTP_EXPIRE_MINUTES: "10"
+      OTP_LENGTH: "6"
+      CORS_ORIGINS: "http://localhost:5173,http://127.0.0.1:5173"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
