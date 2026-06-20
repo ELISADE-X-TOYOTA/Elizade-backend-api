@@ -14,6 +14,9 @@ def _to_staff_out(user: User) -> StaffOut:
     created = user.created_at
     if created.tzinfo is None:
         created = created.replace(tzinfo=timezone.utc)
+    updated = user.updated_at
+    if updated and updated.tzinfo is None:
+        updated = updated.replace(tzinfo=timezone.utc)
     return StaffOut(
         id=user.id,
         firstName=user.first_name,
@@ -26,6 +29,7 @@ def _to_staff_out(user: User) -> StaffOut:
         isActive=user.is_active,
         isVerified=user.is_verified,
         createdAt=created.isoformat(),
+        updatedAt=updated.isoformat() if updated else None,
     )
 
 
@@ -110,3 +114,21 @@ def update_staff(db: Session, staff_id: str, payload: StaffUpdateIn) -> StaffOut
     db.commit()
     db.refresh(staff)
     return _to_staff_out(staff)
+
+
+def send_staff_login_otp(db: Session, staff_id: str) -> dict[str, str]:
+    staff = db.get(User, staff_id)
+    if not staff or staff.role != UserRole.staff:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Staff member not found")
+    if not staff.is_active:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot send OTP to deactivated account")
+
+    create_and_dispatch_otp(
+        db,
+        staff.phone_normalized,
+        staff.phone_display,
+        OtpPurpose.login,
+        user_id=staff.id,
+        email=staff.email,
+    )
+    return {"message": "Login OTP sent."}

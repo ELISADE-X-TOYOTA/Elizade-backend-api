@@ -31,3 +31,12 @@ def update_staff_member(
     db: Session = Depends(get_db),
 ) -> StaffOut:
     return service.update_staff(db, staff_id, payload)
+
+
+@router.post("/{staff_id}/send-otp")
+def send_staff_otp(
+    staff_id: str,
+    _: CurrentAdmin,
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    return service.send_staff_login_otp(db, staff_id)

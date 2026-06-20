@@ -40,3 +40,4 @@ class StaffOut(BaseModel):
     isActive: bool
     isVerified: bool
     createdAt: str
+    updatedAt: str | None = None
