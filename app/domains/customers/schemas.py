@@ -228,7 +228,6 @@ class CustomerVehicleOut(BaseModel):
     nextServiceMileage: int | None = None
     createdAt: datetime
     serviceHistory: list[ServiceHistoryItemOut] = []
-    serviceHistoryLink: str  # canonical API link the frontend can navigate to
 
     model_config = {"populate_by_name": True}
 
@@ -248,11 +247,6 @@ class CustomerTimelineOut(BaseModel):
 
 
 class CustomerNoteCreate(BaseModel):
-    body: str = Field(min_length=1, max_length=5000)
-
-
-class CustomerNoteUpdate(BaseModel):
-    noteId: str | None = None
     body: str = Field(min_length=1, max_length=5000)
 
 
