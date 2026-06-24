@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 class UserPreferences(BaseModel):
@@ -69,3 +69,26 @@ class UserProfileOut(BaseModel):
             department=user.department,
             preferences=UserPreferencesOut.from_db(user.preferences or {}),
         )
+
+
+class UserProfileUpdateIn(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    first_name: str | None = Field(default=None, alias="firstName", max_length=100)
+    last_name: str | None = Field(default=None, alias="lastName", max_length=100)
+    email: EmailStr | None = None
+    phone: str | None = Field(default=None, alias="phone", max_length=30)
+    city: str | None = Field(default=None, max_length=100)
+    state: str | None = Field(default=None, max_length=100)
+    department: str | None = Field(default=None, max_length=100)
+    avatar: str | None = Field(default=None, alias="avatar", max_length=512)
+
+
+class UserPreferencesUpdateIn(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    push_enabled: bool | None = Field(default=None, alias="pushEnabled")
+    sms_enabled: bool | None = Field(default=None, alias="smsEnabled")
+    email_enabled: bool | None = Field(default=None, alias="emailEnabled")
+    marketing_opt_in: bool | None = Field(default=None, alias="marketingOptIn")
+
