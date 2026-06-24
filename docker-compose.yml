@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: elizade
       POSTGRES_DB: elizade_connect
     ports:
-      - "5432:5432"
+      - "5435:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -18,7 +18,7 @@ services:
   api:
     build: .
     ports:
-      - "8000:8000"
+      - "8002:8000"
     environment:
       DATABASE_URL: postgresql+psycopg2://elizade:elizade@db:5432/elizade_connect
       JWT_SECRET: change-me-in-production-use-long-random-string
