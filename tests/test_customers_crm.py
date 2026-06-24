@@ -456,7 +456,6 @@ def test_vehicles_with_service_history(client, db_session):
     Staff retrieves a customer's vehicle list.
     Verifies:
     - All vehicle fields are present and correct
-    - serviceHistoryLink is a valid URL pointing to the expected path
     - serviceHistory items are present and sorted newest-first by performedAt
     - A vehicle without service history returns an empty serviceHistory list
     """
@@ -563,10 +562,6 @@ def test_vehicles_with_service_history(client, db_session):
     assert v1_data["registrationNumber"] == "LAG-VEH-001"
     assert v1_data["isPrimary"] is True
     assert "createdAt" in v1_data
-
-    # ── Verify serviceHistoryLink format ──────────────────────────────────
-    link = v1_data["serviceHistoryLink"]
-    assert f"/api/v1/admin/customers/{customer.id}/vehicles/{vehicle1.id}/service-history" in link
 
     # ── Verify service history is present and sorted newest-first ─────────
     history = v1_data["serviceHistory"]
@@ -840,7 +835,6 @@ def test_notes_unauthenticated(client):
     assert client.get("/api/v1/admin/customers/some-id/notes").status_code == 401
     assert client.post("/api/v1/admin/customers/some-id/notes", json={"body": "Test Note"}).status_code == 401
     assert client.patch("/api/v1/admin/customers/some-id/notes/some-note-id", json={"body": "Updated Note"}).status_code == 401
-    assert client.patch("/api/v1/admin/customers/some-id/notes", json={"noteId": "some-note-id", "body": "Updated Note"}).status_code == 401
     assert client.delete("/api/v1/admin/customers/some-id/notes/some-note-id").status_code == 401
 
 
@@ -860,7 +854,6 @@ def test_notes_customer_role_forbidden(client, db_session):
     assert client.get(f"/api/v1/admin/customers/{customer.id}/notes", headers=headers).status_code == 403
     assert client.post(f"/api/v1/admin/customers/{customer.id}/notes", json={"body": "Test Note"}, headers=headers).status_code == 403
     assert client.patch(f"/api/v1/admin/customers/{customer.id}/notes/some-note-id", json={"body": "Updated Note"}, headers=headers).status_code == 403
-    assert client.patch(f"/api/v1/admin/customers/{customer.id}/notes", json={"noteId": "some-note-id", "body": "Updated Note"}, headers=headers).status_code == 403
     assert client.delete(f"/api/v1/admin/customers/{customer.id}/notes/some-note-id", headers=headers).status_code == 403
 
 
@@ -959,38 +952,21 @@ def test_notes_staff_crud_lifecycle(client, db_session):
     assert response.status_code == 200
     assert response.json()["body"] == "Staff 1 updated note content via path"
 
-    # 6. Staff1 edits their own note (via BODY endpoint) -> Should succeed (200)
-    response = client.patch(
-        f"/api/v1/admin/customers/{customer.id}/notes",
-        json={"noteId": note1_id, "body": "Staff 1 updated note content via body"},
-        headers=headers_staff1,
-    )
-    assert response.status_code == 200
-    assert response.json()["body"] == "Staff 1 updated note content via body"
-
-    # 7. Staff1 tries to update via BODY endpoint without noteId -> Should fail (400)
-    response = client.patch(
-        f"/api/v1/admin/customers/{customer.id}/notes",
-        json={"body": "Missing noteId"},
-        headers=headers_staff1,
-    )
-    assert response.status_code == 400
-
-    # 8. Staff1 tries to delete their own note -> Should fail (403 - Only Admin allowed to delete)
+    # 6. Staff1 tries to delete their own note -> Should fail (403 - Only Admin allowed to delete)
     response = client.delete(
         f"/api/v1/admin/customers/{customer.id}/notes/{note1_id}",
         headers=headers_staff1,
     )
     assert response.status_code == 403
 
-    # 9. Admin deletes the note -> Should succeed (200)
+    # 7. Admin deletes the note -> Should succeed (200)
     response = client.delete(
         f"/api/v1/admin/customers/{customer.id}/notes/{note1_id}",
         headers=headers_admin,
     )
     assert response.status_code == 200
 
-    # 10. Get notes list again -> should be empty
+    # 8. Get notes list again -> should be empty
     response = client.get(
         f"/api/v1/admin/customers/{customer.id}/notes",
         headers=headers_admin,
@@ -1098,10 +1074,10 @@ def test_notes_oversized_body_rejected(client, db_session):
     assert response.status_code == 422
 
 
-def test_notes_idor_cross_customer_body_patch(client, db_session):
+def test_notes_idor_cross_customer_patch(client, db_session):
     """
-    IDOR check: Staff provides the noteId of a note belonging to customer A
-    while hitting the endpoint for customer B. Must return 404, not leak the note.
+    IDOR check: Staff targets the note of customer A while hitting the PATCH
+    endpoint for customer B. Must return 404, not leak the note.
     """
     staff = create_test_user(
         db_session,
@@ -1139,15 +1115,7 @@ def test_notes_idor_cross_customer_body_patch(client, db_session):
     assert response.status_code == 201
     note_a_id = response.json()["id"]
 
-    # Attempt to update it using customer B's URL (IDOR attempt)
-    response = client.patch(
-        f"/api/v1/admin/customers/{customer_b.id}/notes",
-        json={"noteId": note_a_id, "body": "Trying to hijack via IDOR"},
-        headers=headers,
-    )
-    assert response.status_code == 404, "IDOR: note from another customer must not be accessible"
-
-    # Also check the path-based PATCH variant
+    # Attempt to update customer A's note using customer B's URL (IDOR attempt)
     response = client.patch(
         f"/api/v1/admin/customers/{customer_b.id}/notes/{note_a_id}",
         json={"body": "Trying to hijack via IDOR on path"},

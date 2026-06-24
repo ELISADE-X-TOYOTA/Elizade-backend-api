@@ -3,7 +3,7 @@ from datetime import datetime, timezone, timedelta
 from fastapi import HTTPException, status
 from sqlalchemy import or_, func, case, and_
 from sqlalchemy.exc import DataError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.domains.customers.schemas import (
     CustomerActivityItem,
@@ -11,7 +11,6 @@ from app.domains.customers.schemas import (
     CustomerDetailOut,
     CustomerNoteCreate,
     CustomerNoteOut,
-    CustomerNoteUpdate,
     CustomerPreferences,
     CustomerProfileOut,
     CustomerTimelineOut,
@@ -83,9 +82,23 @@ def list_customers(
     # Get total count before pagination
     total = query.count()
 
-    # Apply offset and limit
+    # Apply offset and limit.
+    # Eager-load every relationship that CustomerDetailOut.from_user walks so the
+    # serialization below issues a fixed number of queries instead of N+1 per row.
     offset = (page - 1) * size
-    users = query.order_by(User.created_at.desc()).offset(offset).limit(size).all()
+    users = (
+        query.options(
+            selectinload(User.owned_vehicles),
+            selectinload(User.crm_notes).joinedload(CustomerNote.author),
+            selectinload(User.leads),
+            selectinload(User.service_appointments),
+            selectinload(User.support_tickets),
+        )
+        .order_by(User.created_at.desc())
+        .offset(offset)
+        .limit(size)
+        .all()
+    )
 
     # Calculate total pages
     pages = math.ceil(total / size) if total > 0 else 0
@@ -282,11 +295,10 @@ def get_customer_profile(db: Session, customer_id: str) -> CustomerProfileOut:
     )
 
 
-def get_customer_vehicles(db: Session, customer_id: str, request_base_url: str) -> CustomerVehiclesOut:
+def get_customer_vehicles(db: Session, customer_id: str) -> CustomerVehiclesOut:
     """
-    Return all owned vehicles for a customer together with their service history.
-    Each vehicle includes a `serviceHistoryLink` that the frontend can use to navigate
-    directly to the full service history page for that vehicle.
+    Return all owned vehicles for a customer together with their full service history
+    (embedded inline per vehicle, newest first).
     """
     # Validate the customer exists and is actually a customer role
     user = db.query(User).filter(User.id == customer_id, User.role == UserRole.customer).first()
@@ -317,11 +329,6 @@ def get_customer_vehicles(db: Session, customer_id: str, request_base_url: str) 
             )
         ]
 
-        # Canonical deep-link: /api/v1/admin/customers/{customer_id}/vehicles/{vehicle_id}/service-history
-        # Strip trailing slash from base URL once, then build the path
-        base = request_base_url.rstrip("/")
-        link = f"{base}/api/v1/admin/customers/{customer_id}/vehicles/{ov.id}/service-history"
-
         vehicles_out.append(
             CustomerVehicleOut(
                 id=ov.id,
@@ -341,7 +348,6 @@ def get_customer_vehicles(db: Session, customer_id: str, request_base_url: str) 
                 nextServiceMileage=ov.next_service_mileage,
                 createdAt=ov.created_at,
                 serviceHistory=history,
-                serviceHistoryLink=link,
             )
         )
 

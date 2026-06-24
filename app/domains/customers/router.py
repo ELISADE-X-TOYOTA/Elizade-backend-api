@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -7,7 +7,6 @@ from app.domains.customers import service
 from app.domains.customers.schemas import (
     CustomerNoteCreate,
     CustomerNoteOut,
-    CustomerNoteUpdate,
     CustomerProfileOut,
     CustomerTimelineOut,
     CustomerVehiclesOut,
@@ -58,12 +57,10 @@ def get_customer_profile(
 @router.get("/{customer_id}/vehicles", response_model=CustomerVehiclesOut)
 def get_customer_vehicles(
     customer_id: str,
-    request: Request,
     current_user: StaffPortalUser,  # Only admin/staff can access vehicle + service history data
     db: Session = Depends(get_db),
 ) -> CustomerVehiclesOut:
-    base_url = str(request.base_url)
-    return service.get_customer_vehicles(db, customer_id=customer_id, request_base_url=base_url)
+    return service.get_customer_vehicles(db, customer_id=customer_id)
 
 
 @router.get("/{customer_id}/timeline", response_model=CustomerTimelineOut)
@@ -108,27 +105,6 @@ def update_customer_note_path(
         db,
         customer_id=customer_id,
         note_id=note_id,
-        user_id=current_user.id,
-        body=payload.body,
-    )
-
-
-@router.patch("/{customer_id}/notes", response_model=CustomerNoteOut)
-def update_customer_note_body(
-    customer_id: str,
-    payload: CustomerNoteUpdate,
-    current_user: StaffPortalUser,
-    db: Session = Depends(get_db),
-) -> CustomerNoteOut:
-    if not payload.noteId:
-        raise HTTPException(
-            status_code=400,
-            detail="noteId must be provided in request body when updating via this endpoint",
-        )
-    return service.update_customer_note(
-        db,
-        customer_id=customer_id,
-        note_id=payload.noteId,
         user_id=current_user.id,
         body=payload.body,
     )
