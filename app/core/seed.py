@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.seed_demo_data import seed_demo_data
 from app.domains.users.models import DEFAULT_PREFERENCES, User, UserRole
 
 settings = get_settings()
@@ -36,3 +37,8 @@ def seed_admin_user(db: Session) -> None:
     )
     db.add(admin)
     db.commit()
+
+
+def seed_all(db: Session) -> None:
+    seed_admin_user(db)
+    seed_demo_data(db)
