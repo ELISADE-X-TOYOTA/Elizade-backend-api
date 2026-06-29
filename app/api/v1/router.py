@@ -7,6 +7,7 @@ from app.domains.customers.router import router as customers_router
 from app.domains.dashboard.router import router as dashboard_router
 from app.domains.inventory.admin_router import router as inventory_admin_router
 from app.domains.inventory.router import router as inventory_router
+from app.domains.leads.router import router as leads_router
 from app.domains.notifications.admin_router import router as notifications_admin_router
 from app.domains.notifications.router import router as notifications_router
 from app.domains.staff.router import router as staff_router
@@ -22,6 +23,7 @@ api_router.include_router(staff_router)
 api_router.include_router(inventory_router)
 api_router.include_router(inventory_admin_router)
 api_router.include_router(customers_router)
+api_router.include_router(leads_router)
 api_router.include_router(dashboard_router)
 api_router.include_router(notifications_admin_router)
 api_router.include_router(notifications_router)
