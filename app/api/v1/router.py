@@ -9,6 +9,7 @@ from app.domains.inventory.admin_router import router as inventory_admin_router
 from app.domains.inventory.router import router as inventory_router
 from app.domains.notifications.admin_router import router as notifications_admin_router
 from app.domains.notifications.router import router as notifications_router
+from app.domains.service.router import router as service_router
 from app.domains.staff.router import router as staff_router
 from app.domains.support.router import router as support_router
 from app.domains.users.router import router as users_router
@@ -28,3 +29,4 @@ api_router.include_router(notifications_router)
 api_router.include_router(support_router)
 api_router.include_router(warranty_router)
 api_router.include_router(analytics_router)
+api_router.include_router(service_router)

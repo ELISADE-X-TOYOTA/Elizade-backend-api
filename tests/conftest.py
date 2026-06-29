@@ -8,6 +8,7 @@ rolled back on teardown, so tests are isolated and the data never persists.
 """
 
 import os
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import psycopg2
@@ -21,9 +22,11 @@ from app.core.config import get_settings
 from app.core.database import Base, get_db
 from app.core.security import create_access_token
 from app.domains.branches.models import Branch
+from app.domains.customers.models import OwnedVehicle
 from app.domains.inventory.models import Vehicle, VehicleImage
 from app.domains.registry import *  # noqa: F401,F403 — register every ORM model on Base.metadata
-from app.domains.shared.enums import AvailabilityStatus, BranchType
+from app.domains.service.models import ServiceAppointment, ServiceBay
+from app.domains.shared.enums import AppointmentStatus, AvailabilityStatus, BranchType, ServiceType
 from app.domains.users.models import DEFAULT_PREFERENCES, User, UserRole
 from app.main import app
 
@@ -244,5 +247,72 @@ def image_factory(db_session):
         db_session.commit()
         db_session.refresh(image)
         return image
+
+    return _make
+
+
+@pytest.fixture
+def owned_vehicle_factory(db_session, customer_user):
+    """Create a customer-owned vehicle (defaults to the customer_user)."""
+    def _make(owner: User | None = None, **overrides) -> OwnedVehicle:
+        owner = owner or customer_user
+        defaults = dict(
+            user_id=owner.id,
+            vin="JTDB1234567890001",
+            make="Toyota",
+            model="Corolla",
+            trim="LE",
+            year=2022,
+            color="Silver",
+            color_hex="#C0C0C0",
+            mileage=15000,
+            registration_number="LAG-123-XY",
+        )
+        defaults.update(overrides)
+        vehicle = OwnedVehicle(**defaults)
+        db_session.add(vehicle)
+        db_session.commit()
+        db_session.refresh(vehicle)
+        return vehicle
+
+    return _make
+
+
+@pytest.fixture
+def service_bay_factory(db_session, branch):
+    """Create a service bay (defaults to the `branch` fixture)."""
+    def _make(**overrides) -> ServiceBay:
+        defaults = dict(branch_id=branch.id, name="Bay 1", is_active=True)
+        defaults.update(overrides)
+        bay = ServiceBay(**defaults)
+        db_session.add(bay)
+        db_session.commit()
+        db_session.refresh(bay)
+        return bay
+
+    return _make
+
+
+@pytest.fixture
+def appointment_factory(db_session, branch, customer_user, owned_vehicle_factory):
+    """Create a service appointment; auto-creates an owned vehicle if none given."""
+    def _make(**overrides) -> ServiceAppointment:
+        vehicle = overrides.pop("owned_vehicle", None) or owned_vehicle_factory()
+        defaults = dict(
+            user_id=customer_user.id,
+            owned_vehicle_id=vehicle.id,
+            branch_id=branch.id,
+            service_type=ServiceType.periodic,
+            scheduled_at=datetime.now(timezone.utc),
+            status=AppointmentStatus.confirmed,
+            issue_description="Periodic maintenance",
+            mileage_at_booking=15000,
+        )
+        defaults.update(overrides)
+        appointment = ServiceAppointment(**defaults)
+        db_session.add(appointment)
+        db_session.commit()
+        db_session.refresh(appointment)
+        return appointment
 
     return _make

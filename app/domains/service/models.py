@@ -57,6 +57,7 @@ class ServiceAppointment(Base):
     )
 
     customer: Mapped["User"] = relationship(back_populates="service_appointments", foreign_keys=[user_id])
+    assigned_technician: Mapped["User | None"] = relationship(foreign_keys=[assigned_technician_id])
     owned_vehicle: Mapped["OwnedVehicle"] = relationship(back_populates="service_appointments")
     branch: Mapped["Branch"] = relationship(back_populates="service_appointments")
     bay: Mapped["ServiceBay | None"] = relationship(back_populates="appointments")
@@ -177,3 +178,4 @@ class ServiceHistoryItem(Base):
 
     owned_vehicle: Mapped["OwnedVehicle"] = relationship(back_populates="service_history")
     customer: Mapped["User"] = relationship(back_populates="service_history")
+    branch: Mapped["Branch"] = relationship(foreign_keys=[branch_id])
