@@ -43,7 +43,7 @@ def test_patch_profile_duplicate_email(client, db_session, customer_headers):
     conflict = User(
         phone_normalized="8100000099",
         phone_display="08100000099",
-        email="other@elizade.test",
+        email="other@elizade.com",
         first_name="Other",
         last_name="User",
         role=UserRole.customer,
@@ -57,7 +57,7 @@ def test_patch_profile_duplicate_email(client, db_session, customer_headers):
     response = client.patch(
         "/api/v1/users/me",
         headers=customer_headers,
-        json={"email": "other@elizade.test"},
+        json={"email": "other@elizade.com"},
     )
     assert response.status_code == 409
     assert "Email already in use" in response.json()["detail"]
