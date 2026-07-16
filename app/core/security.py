@@ -19,6 +19,18 @@ def normalize_phone(phone: str) -> str:
     return digits
 
 
+def normalize_email(email: str) -> str:
+    return email.strip().lower()
+
+
+def placeholder_phone_for_email(email: str) -> tuple[str, str]:
+    """Synthetic phone fields for email-only accounts (users.phone is still required)."""
+    norm = normalize_email(email)
+    digest = hashlib.sha256(norm.encode()).hexdigest()[:15]
+    phone_norm = f"e{digest}"
+    return phone_norm, norm
+
+
 def _otp_digest(code: str) -> str:
     payload = f"{settings.jwt_secret}:otp:{code}"
     return hashlib.sha256(payload.encode()).hexdigest()

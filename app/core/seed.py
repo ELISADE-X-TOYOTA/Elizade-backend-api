@@ -8,25 +8,42 @@ settings = get_settings()
 
 
 def seed_admin_user(db: Session) -> None:
-    phone = settings.admin_phone_normalized
-    existing = db.query(User).filter(User.phone_normalized == phone).one_or_none()
+    email = settings.admin_email.lower()
+    existing = db.query(User).filter(User.email == email).one_or_none()
     if existing:
         existing.role = UserRole.admin
         existing.department = existing.department or "Management"
         existing.first_name = existing.first_name or "Divine"
         existing.last_name = existing.last_name or "Obinali"
-        existing.email = existing.email or "divine.obinali@elizade.com"
+        existing.email = email
         existing.is_verified = True
         existing.is_active = True
         db.commit()
         return
 
+    previous_admin = (
+        db.query(User)
+        .filter(User.role == UserRole.admin)
+        .order_by(User.created_at.asc())
+        .first()
+    )
+    if previous_admin:
+        previous_admin.email = email
+        previous_admin.role = UserRole.admin
+        previous_admin.department = previous_admin.department or "Management"
+        previous_admin.first_name = previous_admin.first_name or "Divine"
+        previous_admin.last_name = previous_admin.last_name or "Obinali"
+        previous_admin.is_verified = True
+        previous_admin.is_active = True
+        db.commit()
+        return
+
     admin = User(
-        phone_normalized=phone,
+        phone_normalized="8107891549",
         phone_display="08107891549",
         first_name="Divine",
         last_name="Obinali",
-        email="divine.obinali@elizade.com",
+        email=email,
         city="Lagos",
         state="Lagos",
         role=UserRole.admin,

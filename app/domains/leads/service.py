@@ -608,10 +608,17 @@ def add_note(
     if not exists:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found")
 
+    body = payload.body.strip()
+    if not body:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Note body cannot be empty",
+        )
+
     note = LeadNote(
         lead_id=lead_id,
         author_id=current_user.id,
-        body=payload.body.strip(),
+        body=body,
     )
     db.add(note)
     db.commit()

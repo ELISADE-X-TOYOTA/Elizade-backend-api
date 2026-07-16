@@ -104,7 +104,7 @@ class OtpChallenge(Base):
     __tablename__ = "otp_challenges"
 
     id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
-    phone_normalized: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
+    email: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     user_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=True)
     code_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     purpose: Mapped[OtpPurpose] = mapped_column(Enum(OtpPurpose, name="otp_purpose"), nullable=False)

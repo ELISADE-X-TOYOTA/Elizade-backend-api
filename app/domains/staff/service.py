@@ -75,13 +75,13 @@ def create_staff(db: Session, payload: StaffCreateIn) -> StaffOut:
     db.refresh(staff)
 
     if payload.send_welcome_otp:
+        if not staff.email:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Staff email is required to send welcome OTP.")
         create_and_dispatch_otp(
             db,
-            phone_norm,
-            payload.phone.strip(),
+            staff.email,
             OtpPurpose.login,
             user_id=staff.id,
-            email=staff.email,
         )
 
     return _to_staff_out(staff)
@@ -122,13 +122,13 @@ def send_staff_login_otp(db: Session, staff_id: str) -> dict[str, str]:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Staff member not found")
     if not staff.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot send OTP to deactivated account")
+    if not staff.email:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Staff account has no email address.")
 
     create_and_dispatch_otp(
         db,
-        staff.phone_normalized,
-        staff.phone_display,
+        staff.email,
         OtpPurpose.login,
         user_id=staff.id,
-        email=staff.email,
     )
     return {"message": "Login OTP sent."}

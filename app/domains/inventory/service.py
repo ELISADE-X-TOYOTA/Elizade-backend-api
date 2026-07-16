@@ -616,6 +616,52 @@ _BULK_COLUMN_MAP = {
     "is_published": "isPublished",
 }
 
+BULK_IMPORT_TEMPLATE_COLUMNS = [
+    "model",
+    "trim",
+    "year",
+    "color",
+    "price",
+    "fuelType",
+    "transmission",
+    "engine",
+    "branchId",
+    "vin",
+    "stockNumber",
+    "make",
+    "availability",
+    "isPublished",
+]
+
+
+def bulk_import_template_csv(db: Session) -> str:
+    """Return a UTF-8 CSV template with headers and one annotated example row."""
+    branch = db.query(Branch).filter(Branch.is_active.is_(True)).order_by(Branch.name.asc()).first()
+    branch_id = str(branch.id) if branch else "PASTE_BRANCH_UUID_FROM_BRANCHES_PAGE"
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(BULK_IMPORT_TEMPLATE_COLUMNS)
+    writer.writerow(
+        [
+            "Corolla",
+            "XLE",
+            "2024",
+            "Super White",
+            "28500000",
+            "Petrol",
+            "Automatic",
+            "1.8L",
+            branch_id,
+            "",
+            "STK-001",
+            "Toyota",
+            "available",
+            "true",
+        ]
+    )
+    return buffer.getvalue()
+
 
 def _parse_bulk_rows(file: UploadFile) -> list[dict]:
     """Read a CSV or XLSX upload into a list of {header: value} dicts."""

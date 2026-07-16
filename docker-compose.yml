@@ -18,12 +18,13 @@ services:
   api:
     build: .
     ports:
-      - "8002:8000"
+      - "8000:8000"
+    env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg2://elizade:elizade@db:5432/elizade_connect
       JWT_SECRET: change-me-in-production-use-long-random-string
       JWT_EXPIRE_MINUTES: "10080"
-      ADMIN_PHONE_NORMALIZED: "8107891549"
+      ADMIN_EMAIL: divinewilson766@gmail.com
       OTP_EXPIRE_MINUTES: "10"
       OTP_LENGTH: "6"
       CORS_ORIGINS: "http://localhost:5173,http://127.0.0.1:5173"

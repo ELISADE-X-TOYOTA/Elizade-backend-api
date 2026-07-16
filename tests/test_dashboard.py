@@ -161,3 +161,17 @@ def test_dashboard_summary_reflects_seeded_data(
     assert data["activeNotificationRules"] == 1
     assert data["campaignsSent"] == 1
     assert data["unreadNotificationsTotal"] == 1
+
+
+def test_dashboard_overview_returns_sections(client, staff_headers, branch, vehicle_factory, customer_user):
+    vehicle_factory(availability=AvailabilityStatus.available)
+    res = client.get("/api/v1/admin/dashboard/overview", headers=staff_headers)
+    assert res.status_code == 200
+    body = res.json()
+    assert "summary" in body
+    assert "leadPipeline" in body
+    assert "hotLeads" in body
+    assert "todayService" in body
+    assert "recentActivity" in body
+    assert body["summary"]["vehiclesAvailable"] >= 1
+    assert body["summary"]["customersTotal"] >= 1

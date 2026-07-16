@@ -62,6 +62,19 @@ def create_vehicle(
     return service.create_vehicle(db, payload, current_user)
 
 
+@router.get("/bulk-import/template")
+def bulk_import_template(
+    _: CurrentAdmin,
+    db: Session = Depends(get_db),
+) -> Response:
+    content = service.bulk_import_template_csv(db)
+    return Response(
+        content=content,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="elizade-vehicle-import-template.csv"'},
+    )
+
+
 @router.post("/bulk-import", response_model=BulkImportResultOut)
 def bulk_import_vehicles(
     current_user: CurrentAdmin,

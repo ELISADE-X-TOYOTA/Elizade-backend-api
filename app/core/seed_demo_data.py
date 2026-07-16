@@ -11,12 +11,15 @@ from app.domains.customers.models import CustomerNote, OwnedVehicle
 from app.domains.inventory.models import Vehicle, VehicleImage
 from app.domains.notifications.models import BroadcastCampaign, NotificationRule
 from app.domains.shared.enums import (
+    AdditionalWorkStatus,
     AppointmentStatus,
     AvailabilityStatus,
     BranchType,
     BroadcastCampaignStatus,
     ClaimStatus,
+    LeadStatus,
     RecallSeverity,
+    ServiceJobStatus,
     ServiceType,
     SlaStatus,
     TicketCategory,
@@ -29,56 +32,75 @@ from app.domains.support.models import SlaConfig, SupportTicket
 from app.domains.users.models import DEFAULT_PREFERENCES, User, UserRole
 from app.domains.warranty.models import RecallCampaign, RecallVehicle, WarrantyCertificate, WarrantyClaim
 
-_WIKI = "https://upload.wikimedia.org/wikipedia/commons/thumb"
+_LEAD_SPECS: list[tuple] = [
+    ("Chidi Eze", "08031234567", "chidi.eze@email.com", "Website", LeadStatus.new, "Camry XSE", Decimal("18500000")),
+    ("Fatima Bello", "08042345678", "fatima.b@email.com", "Showroom walk-in", LeadStatus.contacted, "RAV4 Hybrid", Decimal("24500000")),
+    ("Emeka Nwosu", "08053456789", None, "Test drive", LeadStatus.qualified, "Corolla", Decimal("12800000")),
+    ("Amina Yusuf", "08064567890", "amina.y@email.com", "Referral", LeadStatus.proposal, "Highlander", Decimal("32000000")),
+    ("Tunde Adeyemi", "08075678901", "tunde.a@email.com", "Phone inquiry", LeadStatus.negotiation, "Hilux", Decimal("27500000")),
+    ("Grace Okoro", "08086789012", "grace.o@email.com", "Website", LeadStatus.won, "Camry", Decimal("19200000")),
+    ("Ibrahim Musa", "08097890123", None, "Showroom walk-in", LeadStatus.lost, "Fortuner", Decimal("31000000")),
+    ("Ngozi Okafor", "08108901234", "ngozi.o@email.com", "Social media", LeadStatus.new, "Yaris Cross", Decimal("15500000")),
+]
 
-# Verified Toyota catalogue photos (Wikimedia Commons — always actual vehicles).
-_MODEL_IMAGES: dict[str, list[str]] = {
-    "Corolla": [
-        f"{_WIKI}/9/9f/2018_Toyota_Corolla_%28E210%29_Ascent_sedan_%282018-08-27%29_01.jpg/1280px-2018_Toyota_Corolla_%28E210%29_Ascent_sedan_%282018-08-27%29_01.jpg",
-        f"{_WIKI}/4/4f/2020_Toyota_Corolla_Hybrid_%28ZE141R%29_Ascent_sport_hatchback_%282020-07-17%29.jpg/1280px-2020_Toyota_Corolla_Hybrid_%28ZE141R%29_Ascent_sport_hatchback_%282020-07-17%29.jpg",
-    ],
-    "Camry": [
-        f"{_WIKI}/6/68/2018_Toyota_Camry_%28ASV70R%29_Ascent_sedan_%282018-08-27%29_01.jpg/1280px-2018_Toyota_Camry_%28ASV70R%29_Ascent_sedan_%282018-08-27%29_01.jpg",
-        f"{_WIKI}/7/7e/2021_Toyota_Camry_%28ASV70R%29_Ascent_Hybrid_sedan_%282021-03-22%29.jpg/1280px-2021_Toyota_Camry_%28ASV70R%29_Ascent_Hybrid_sedan_%282021-03-22%29.jpg",
-    ],
-    "RAV4": [
-        f"{_WIKI}/5/5f/2019_Toyota_RAV4_%28AXAH52R%29_GX_%28hybrid%29_wagon_%2818-03-2019%29.jpg/1280px-2019_Toyota_RAV4_%28AXAH52R%29_GX_%28hybrid%29_wagon_%2818-03-2019%29.jpg",
-        f"{_WIKI}/8/8d/2020_Toyota_RAV4_%28AXAH54R%29_Cruiser_%28hybrid%29_wagon_%282020-07-06%29.jpg/1280px-2020_Toyota_RAV4_%28AXAH54R%29_Cruiser_%28hybrid%29_wagon_%282020-07-06%29.jpg",
-    ],
-    "Highlander": [
-        f"{_WIKI}/8/82/2020_Toyota_Highlander_%28MXU80R%29_GXL_wagon_%282020-08-31%29.jpg/1280px-2020_Toyota_Highlander_%28MXU80R%29_GXL_wagon_%282020-08-31%29.jpg",
-        f"{_WIKI}/0/0a/2021_Toyota_Kluger_%28AXUH78R%29_GXL_%28hybrid%29_wagon_%282021-08-18%29.jpg/1280px-2021_Toyota_Kluger_%28AXUH78R%29_GXL_%28hybrid%29_wagon_%282021-08-18%29.jpg",
-    ],
-    "Hilux": [
-        f"{_WIKI}/1/16/2016_Toyota_Hilux_%28GN126R%29_SR5_4-door_utility_%282016-01-06%29.jpg/1280px-2016_Toyota_Hilux_%28GN126R%29_SR5_4-door_utility_%282016-01-06%29.jpg",
-        f"{_WIKI}/4/4a/2019_Toyota_Hilux_%28GUN126R%29_SR5_4-door_utility_%282019-08-08%29.jpg/1280px-2019_Toyota_Hilux_%28GUN126R%29_SR5_4-door_utility_%282019-08-08%29.jpg",
-    ],
-    "Land Cruiser": [
-        f"{_WIKI}/9/9c/2022_Toyota_Land_Cruiser_%28J300%29_ZX_%28cropped%29.jpg/1280px-2022_Toyota_Land_Cruiser_%28J300%29_ZX_%28cropped%29.jpg",
-        f"{_WIKI}/6/6a/2016_Toyota_Land_Cruiser_%28VDJ200R%29_VX_wagon_%282016-01-06%29.jpg/1280px-2016_Toyota_Land_Cruiser_%28VDJ200R%29_VX_wagon_%282016-01-06%29.jpg",
-    ],
-    "Prius": [
-        f"{_WIKI}/3/3e/2016_Toyota_Prius_%28ZVW60R%29_i-Tech_liftback_%282016-10-12%29_01.jpg/1280px-2016_Toyota_Prius_%28ZVW60R%29_i-Tech_liftback_%282016-10-12%29_01.jpg",
-        f"{_WIKI}/f/f2/2017_Toyota_Prius_%28ZVW60R%29_i-Tech_liftback_%282017-11-16%29.jpg/1280px-2017_Toyota_Prius_%28ZVW60R%29_i-Tech_liftback_%282017-11-16%29.jpg",
-    ],
-    "Yaris": [
-        f"{_WIKI}/b/b3/2020_Toyota_Yaris_%28MXPH10R%29_ZR_hatchback_%282020-12-19%29.jpg/1280px-2020_Toyota_Yaris_%28MXPH10R%29_ZR_hatchback_%282020-12-19%29.jpg",
-        f"{_WIKI}/8/8e/2017_Toyota_Yaris_%28XP130%29_Ascent_hatchback_%282017-11-16%29.jpg/1280px-2017_Toyota_Yaris_%28XP130%29_Ascent_hatchback_%282017-11-16%29.jpg",
-    ],
-    "Sienna": [
-        f"{_WIKI}/5/5a/2021_Toyota_Sienna_%28XL40%29_XLE_%28cropped%29.jpg/1280px-2021_Toyota_Sienna_%28XL40%29_XLE_%28cropped%29.jpg",
-        f"{_WIKI}/4/4d/2015_Toyota_Sienna_%28US%29.jpg/1280px-2015_Toyota_Sienna_%28US%29.jpg",
-    ],
-    "Fortuner": [
-        f"{_WIKI}/6/6e/2016_Toyota_Fortuner_%28New_Zealand%29.jpg/1280px-2016_Toyota_Fortuner_%28New_Zealand%29.jpg",
-        f"{_WIKI}/8/8b/2018_Toyota_Fortuner_%28AN160%29_VXR_wagon_%282018-08-31%29.jpg/1280px-2018_Toyota_Fortuner_%28AN160%29_VXR_wagon_%282018-08-31%29.jpg",
-    ],
-}
 
-_DEFAULT_IMAGES = _MODEL_IMAGES["Corolla"]
-_DEMO_IMAGE = _DEFAULT_IMAGES[0]
+def _seed_leads(db: Session, assignee_id: str | None) -> None:
+    from app.domains.leads.models import Lead
 
-_UNRELIABLE_IMAGE_HOSTS = ("unsplash.com", "picsum.photos")
+    if db.query(Lead).count() >= len(_LEAD_SPECS):
+        return
+
+    vehicles = db.query(Vehicle).filter(Vehicle.deleted_at.is_(None)).limit(8).all()
+    now = datetime.now(timezone.utc)
+
+    for i, (name, phone, email, source, lead_status, model, value) in enumerate(_LEAD_SPECS):
+        if db.query(Lead).filter(Lead.phone == phone, Lead.interested_model == model).one_or_none():
+            continue
+        vehicle = vehicles[i % len(vehicles)] if vehicles else None
+        lead = Lead(
+            customer_name=name,
+            email=email,
+            phone=phone,
+            source=source,
+            status=lead_status,
+            interested_model=model,
+            vehicle_id=vehicle.id if vehicle else None,
+            assigned_agent_id=assignee_id,
+            value=value,
+            notes="Demo pipeline lead for Elizade Connect.",
+        )
+        if lead_status == LeadStatus.won:
+            lead.won_at = now - timedelta(days=3)
+        if lead_status == LeadStatus.lost:
+            lead.lost_at = now - timedelta(days=5)
+            lead.lost_reason = "Chose competitor offer"
+        db.add(lead)
+
+_CAR_IMAGE_POOL: list[str] = [
+    "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQzGVzVg_2I0uBcIXbPHfbrnu_zMcCmkJBp0n8OB3al2w&s=10",
+    "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQ3emKlXRIgpEufUk4Mt9uoIn-qnywLE6xud6L5BFZb5Q&s=10",
+    "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTNdhZDZdxnUn6HXoZNjid90Vf0i959TY9iYL4sBQkr7A&s=10",
+    "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTjglcsy8b8ReSpFb_8qnNMzi1LLF2k-HBZyvDSOqxCEg&s=10",
+    "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQKa-7w7jNoL-irPZQZFGZTVc34wuM6gZbd2bZua3j0ag&s=10",
+    "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRlzgyVHZ99X4Egasb6Y2avWJEXlNSC0cacJr2I5hDdgA&s=10",
+    "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTnEnmNXW4WoQUoWXiL_Q5mXC4dPDD5bZUUUg6_PKC5hw&s=10",
+    "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTG0AYvNme00ghOXHfbsMTxPzAAd9q9di5mGvlMF-PW6Q&s=10",
+    "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTiDJVGABoKldXIwzw6pjDaxT9uO2xCUBOpbSA2GQAVRw&s=10",
+    "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRX-_FmsHoM1uJFtS11VcoLfNgnce9Z1Eo5UeYB--VGzA&s=10",
+    "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTSgSiOHiqQRkKXB8DCeDMsiBpXa7hsF_WL7paRQJzB8g&s=10",
+    "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQxH4Zbw3B1UWEkzNW4DOmUyQJgYBDVkynhPVdOnQ4W6w&s=10",
+    "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcR2GJvZkQnIzSXu771TMJT2HpqPs9S2LkCZoP7KoLuxzQ&s=10",
+    "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSNc7FkvwpE_ZXf9Q5KTxosBtJWtJ8LeXaX7GK92jkYMA&s=10",
+    "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQ2u008SQNPT9Ux1JktTFYEOpQNC5LyaosPSXrp-65oSw&s=10",
+    "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRkAgif1oNjvYUqUaEn18DxsZXrqGCGeR2Y4dEqkmFmfg&s=10",
+    "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTR2h18adya8hReoah7JMw89tr_fKOevUGbu39yQbJQ_w&s",
+    "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSlzKG5-Im30q3n9bBTYPR5mRdxFfr3oRg4tikHFWNsNg&s=10",
+    "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSAF5B83wGoemPvh9d0JrV8rSPAokm-0pkkU-uHHcwprQ&s=10",
+]
+
+_DEMO_IMAGE = _CAR_IMAGE_POOL[0]
+
+_UNRELIABLE_IMAGE_HOSTS = ("unsplash.com", "picsum.photos", "wikimedia.org", "upload.wikimedia.org")
 
 _BRANCHES = [
     {
@@ -263,10 +285,8 @@ def _seed_key(*parts: str | None) -> str:
 
 
 def _images_for_model(model: str, seed_key: str, count: int = 2) -> list[str]:
-    pool = _MODEL_IMAGES.get(model, _DEFAULT_IMAGES)
-    if not pool:
-        return [_DEMO_IMAGE]
-    offset = sum(ord(c) for c in seed_key) % len(pool)
+    pool = _CAR_IMAGE_POOL
+    offset = (sum(ord(c) for c in seed_key) + sum(ord(c) for c in model)) % len(pool)
     urls: list[str] = []
     for i in range(min(count, len(pool))):
         url = pool[(offset + i) % len(pool)]
@@ -447,10 +467,167 @@ def _seed_customers(db: Session, admin_id: str | None) -> list[User]:
     return seeded
 
 
-def _seed_operational_data(db: Session, admin_id: str | None, customers: list[User], branch_rows: list[Branch]) -> None:
-    if db.query(SupportTicket).count() >= 8:
+_DEMO_SERVICE_MARKER = "Demo service:"
+
+
+def _seed_service_ops(
+    db: Session,
+    *,
+    admin_id: str | None,
+    branch_rows: list[Branch],
+) -> None:
+    """Seed bays and today's service board — runs independently of support/warranty counts."""
+    from app.domains.service.models import (
+        AdditionalWorkRequest,
+        ServiceAppointment,
+        ServiceBay,
+        ServiceJob,
+        ServiceJobStage,
+    )
+
+    if not branch_rows:
         return
 
+    if db.query(ServiceBay).count() == 0:
+        for branch in branch_rows:
+            for bay_num in range(1, 5):
+                db.add(ServiceBay(branch_id=branch.id, name=f"Bay {bay_num}", is_active=True))
+        db.flush()
+
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    existing_demo = (
+        db.query(ServiceAppointment)
+        .filter(ServiceAppointment.issue_description.like(f"{_DEMO_SERVICE_MARKER}%"))
+        .order_by(ServiceAppointment.scheduled_at.asc())
+        .all()
+    )
+    if len(existing_demo) >= 8:
+        # Roll demo slots to today so the ops board stays populated after restarts.
+        for appt in existing_demo:
+            hour = max(8, min(appt.scheduled_at.hour, 17))
+            appt.scheduled_at = today_start + timedelta(hours=hour)
+            appt.estimated_completion = appt.scheduled_at + timedelta(hours=3)
+        return
+
+    staff = (
+        db.query(User)
+        .filter(User.role.in_([UserRole.staff, UserRole.admin]), User.is_active.is_(True))
+        .order_by(User.created_at.asc())
+        .first()
+    )
+    assignee_id = staff.id if staff else admin_id
+
+    owners = (
+        db.query(User)
+        .filter(User.role == UserRole.customer, User.owned_vehicles.any())
+        .limit(8)
+        .all()
+    )
+    if not owners:
+        return
+
+    bays = db.query(ServiceBay).filter(ServiceBay.is_active.is_(True)).all()
+    if not bays:
+        return
+
+    slot_specs: list[tuple[int, AppointmentStatus, ServiceType, str, bool, bool]] = [
+        (9, AppointmentStatus.confirmed, ServiceType.periodic, "5,000 km periodic service", False, False),
+        (10, AppointmentStatus.confirmed, ServiceType.inspection, "Pre-trip safety inspection", False, False),
+        (11, AppointmentStatus.in_progress, ServiceType.repair, "Brake pad replacement", True, False),
+        (12, AppointmentStatus.in_progress, ServiceType.periodic, "Oil change and filter", True, False),
+        (13, AppointmentStatus.awaiting_approval, ServiceType.repair, "Suspension noise diagnosis", True, True),
+        (14, AppointmentStatus.confirmed, ServiceType.recall, "Fuel pump recall check", False, False),
+        (15, AppointmentStatus.requested, ServiceType.repair, "AC not cooling properly", False, False),
+        (16, AppointmentStatus.completed, ServiceType.periodic, "10,000 km service completed", True, False),
+    ]
+
+    stage_labels = [
+        "Vehicle received",
+        "Inspection",
+        "Service performed",
+        "Quality check",
+        "Ready for collection",
+    ]
+
+    for i, (hour, appt_status, service_type, detail, with_job, with_extra_work) in enumerate(slot_specs):
+        if i >= len(owners):
+            break
+        customer = owners[i]
+        vehicle = customer.owned_vehicles[0]
+        branch = branch_rows[i % len(branch_rows)]
+        branch_bays = [b for b in bays if b.branch_id == branch.id]
+        bay = branch_bays[i % len(branch_bays)] if branch_bays else bays[i % len(bays)]
+        scheduled_at = today_start + timedelta(hours=hour)
+        eta = scheduled_at + timedelta(hours=3)
+
+        appt = ServiceAppointment(
+            user_id=customer.id,
+            owned_vehicle_id=vehicle.id,
+            branch_id=branch.id,
+            bay_id=bay.id,
+            service_type=service_type,
+            scheduled_at=scheduled_at,
+            status=appt_status,
+            issue_description=f"{_DEMO_SERVICE_MARKER} {detail}",
+            estimated_completion=eta,
+            mileage_at_booking=vehicle.mileage,
+            assigned_technician_id=assignee_id,
+            technician_notes="Demo board entry for service operations UI." if with_job else None,
+        )
+        db.add(appt)
+        db.flush()
+
+        if not with_job:
+            continue
+
+        job_status = (
+            ServiceJobStatus.awaiting_approval
+            if appt_status == AppointmentStatus.awaiting_approval
+            else ServiceJobStatus.completed
+            if appt_status == AppointmentStatus.completed
+            else ServiceJobStatus.in_progress
+        )
+        job = ServiceJob(
+            appointment_id=appt.id,
+            bay_id=bay.id,
+            status=job_status,
+            started_at=scheduled_at - timedelta(minutes=30),
+            estimated_completion=eta,
+            completed_at=scheduled_at + timedelta(hours=2) if appt_status == AppointmentStatus.completed else None,
+        )
+        db.add(job)
+        db.flush()
+
+        for order, label in enumerate(stage_labels):
+            completed = (
+                appt_status == AppointmentStatus.completed
+                or (appt_status == AppointmentStatus.in_progress and order < 2)
+                or (appt_status == AppointmentStatus.awaiting_approval and order < 3)
+            )
+            db.add(
+                ServiceJobStage(
+                    job_id=job.id,
+                    label=label,
+                    sort_order=order,
+                    completed=completed,
+                    completed_at=scheduled_at if completed else None,
+                )
+            )
+
+        if with_extra_work:
+            db.add(
+                AdditionalWorkRequest(
+                    job_id=job.id,
+                    description="Replace worn lower control arm bushings",
+                    cost=Decimal("85000"),
+                    status=AdditionalWorkStatus.pending_approval,
+                )
+            )
+
+
+def _seed_operational_data(db: Session, admin_id: str | None, customers: list[User], branch_rows: list[Branch]) -> None:
     now = datetime.now(timezone.utc)
     staff = (
         db.query(User)
@@ -492,9 +669,6 @@ def _seed_operational_data(db: Session, admin_id: str | None, customers: list[Us
             )
         )
 
-    if db.query(WarrantyClaim).count() >= 4:
-        return
-
     claim_specs = [
         (ClaimStatus.submitted, "Engine mount vibration"),
         (ClaimStatus.under_review, "Infotainment screen flicker"),
@@ -531,48 +705,6 @@ def _seed_operational_data(db: Session, admin_id: str | None, customers: list[Us
                 assigned_to_id=assignee_id,
             )
         )
-
-    try:
-        from app.domains.service.models import ServiceAppointment, ServiceBay
-
-        if db.query(ServiceBay).count() == 0:
-            for branch in branch_rows:
-                for bay_num in range(1, 5):
-                    db.add(ServiceBay(branch_id=branch.id, name=f"Bay {bay_num}", is_active=True))
-            db.flush()
-
-        if db.query(ServiceAppointment).count() >= 6:
-            return
-
-        bays = db.query(ServiceBay).filter(ServiceBay.is_active.is_(True)).all()
-        start = now.replace(hour=8, minute=0, second=0, microsecond=0)
-        owners = owners_with_vehicles[:6]
-
-        for i, customer in enumerate(owners):
-            vehicle = customer.owned_vehicles[0]
-            branch = branch_rows[i % len(branch_rows)]
-            bay = bays[i % len(bays)] if bays else None
-            slot = start + timedelta(hours=i * 2)
-            db.add(
-                ServiceAppointment(
-                    user_id=customer.id,
-                    owned_vehicle_id=vehicle.id,
-                    branch_id=branch.id,
-                    bay_id=bay.id if bay else None,
-                    service_type=ServiceType.periodic if i % 2 == 0 else ServiceType.repair,
-                    scheduled_at=slot,
-                    status=(
-                        AppointmentStatus.confirmed
-                        if i % 3
-                        else AppointmentStatus.in_progress
-                    ),
-                    issue_description="Periodic maintenance" if i % 2 == 0 else "Customer reported unusual noise",
-                    mileage_at_booking=vehicle.mileage,
-                    assigned_technician_id=assignee_id,
-                )
-            )
-    except Exception:
-        pass
 
 
 def _seed_sla_configs(db: Session) -> None:
@@ -747,6 +879,14 @@ def _run_seed_demo_data(db: Session) -> None:
 
     customers = _seed_customers(db, admin_id)
     _seed_operational_data(db, admin_id, customers, branch_rows)
+    staff = (
+        db.query(User)
+        .filter(User.role.in_([UserRole.staff, UserRole.admin]), User.is_active.is_(True))
+        .order_by(User.created_at.asc())
+        .first()
+    )
+    _seed_leads(db, staff.id if staff else admin_id)
+    _seed_service_ops(db, admin_id=admin_id, branch_rows=branch_rows)
     _seed_sla_configs(db)
     _seed_warranty_extras(db, admin_id)
     _seed_notification_engine(db, admin_id)

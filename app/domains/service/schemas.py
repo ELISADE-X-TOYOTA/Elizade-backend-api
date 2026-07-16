@@ -310,9 +310,47 @@ class AdditionalWorkStatusUpdateIn(BaseModel):
     status: str  # pending_approval | approved | rejected
 
 
-# --------------------------------------------------------------------------- #
-# Service history                                                             #
-# --------------------------------------------------------------------------- #
+class CustomerAdditionalWorkDecisionIn(BaseModel):
+    decision: str  # approve | reject
+
+
+class CustomerAppointmentListItemOut(BaseModel):
+    id: str
+    vehicleId: str
+    vehicleLabel: str
+    serviceType: str
+    scheduledAt: str
+    status: str
+    branchId: str
+    branchName: str
+    jobId: str | None = None
+    pendingAdditionalWork: bool = False
+
+    @staticmethod
+    def from_model(appt) -> "CustomerAppointmentListItemOut":
+        pending = False
+        if appt.job and appt.job.additional_work:
+            from app.domains.shared.enums import AdditionalWorkStatus
+
+            pending = any(w.status == AdditionalWorkStatus.pending_approval for w in appt.job.additional_work)
+        vehicle = appt.owned_vehicle
+        return CustomerAppointmentListItemOut(
+            id=appt.id,
+            vehicleId=appt.owned_vehicle_id,
+            vehicleLabel=_vehicle_label(vehicle),
+            serviceType=appt.service_type.value,
+            scheduledAt=appt.scheduled_at.isoformat(),
+            status=appt.status.value,
+            branchId=appt.branch_id,
+            branchName=appt.branch.name if appt.branch else "",
+            jobId=appt.job.id if appt.job else None,
+            pendingAdditionalWork=pending,
+        )
+
+
+class CustomerServiceTrackOut(BaseModel):
+    appointment: AppointmentDetailOut
+    job: JobDetailOut | None = None
 
 class ServiceHistoryItemOut(BaseModel):
     id: str

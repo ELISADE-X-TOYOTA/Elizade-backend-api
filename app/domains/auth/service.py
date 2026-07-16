@@ -4,7 +4,12 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.core.security import create_access_token, normalize_phone, verify_otp_hash
+from app.core.security import (
+    create_access_token,
+    normalize_email,
+    placeholder_phone_for_email,
+    verify_otp_hash,
+)
 from app.domains.auth.schemas import AuthTokenOut, OtpRequestIn, OtpRequestOut, OtpVerifyIn
 from app.domains.users.models import DEFAULT_PREFERENCES, OtpChallenge, OtpPurpose, User, UserRole
 from app.domains.users.schemas import UserProfileOut
@@ -14,24 +19,21 @@ settings = get_settings()
 
 
 def _apply_admin_role(user: User) -> None:
-    if user.phone_normalized == settings.admin_phone_normalized:
+    if user.email and normalize_email(user.email) == normalize_email(settings.admin_email):
         user.role = UserRole.admin
         user.department = user.department or "Management"
 
 
 def request_otp(db: Session, payload: OtpRequestIn) -> OtpRequestOut:
-    phone_norm = normalize_phone(payload.phone)
-    if len(phone_norm) < 9:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid phone number")
-
+    email_norm = normalize_email(str(payload.email))
     purpose = OtpPurpose(payload.purpose)
-    user = db.query(User).filter(User.phone_normalized == phone_norm).one_or_none()
+    user = db.query(User).filter(User.email == email_norm).one_or_none()
 
     if purpose == OtpPurpose.login:
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="No account found for this number. Please register.",
+                detail="No account found for this email. Please register.",
             )
         if not user.is_active:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is deactivated. Contact admin.")
@@ -46,17 +48,14 @@ def request_otp(db: Session, payload: OtpRequestIn) -> OtpRequestOut:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Account already exists. Please sign in.",
             )
-        if payload.email:
-            email_owner = db.query(User).filter(User.email == payload.email).one_or_none()
-            if email_owner and email_owner.phone_normalized != phone_norm:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already in use.")
+        phone_norm, phone_display = placeholder_phone_for_email(email_norm)
         if not user:
             user = User(
                 phone_normalized=phone_norm,
-                phone_display=payload.phone.strip(),
+                phone_display=phone_display,
                 first_name=payload.first_name.strip(),
                 last_name=payload.last_name.strip(),
-                email=payload.email,
+                email=email_norm,
                 role=UserRole.customer,
                 is_verified=False,
                 is_active=True,
@@ -68,36 +67,32 @@ def request_otp(db: Session, payload: OtpRequestIn) -> OtpRequestOut:
         else:
             user.first_name = payload.first_name.strip()
             user.last_name = payload.last_name.strip()
-            user.phone_display = payload.phone.strip()
-            if payload.email:
-                user.email = payload.email
+            user.email = email_norm
             if user.role == UserRole.customer or not user.is_verified:
                 user.role = UserRole.customer
             _apply_admin_role(user)
 
     create_and_dispatch_otp(
         db,
-        phone_norm,
-        payload.phone.strip(),
+        email_norm,
         purpose,
         user_id=user.id if user else None,
-        email=user.email if user else payload.email,
     )
 
     return OtpRequestOut(
-        message="Verification code sent.",
+        message="Verification code sent to your email.",
         expires_in_minutes=settings.otp_expire_minutes,
     )
 
 
 def verify_otp(db: Session, payload: OtpVerifyIn) -> AuthTokenOut:
-    phone_norm = normalize_phone(payload.phone)
+    email_norm = normalize_email(str(payload.email))
     code = payload.code.strip()
 
     challenge = (
         db.query(OtpChallenge)
         .filter(
-            OtpChallenge.phone_normalized == phone_norm,
+            OtpChallenge.email == email_norm,
             OtpChallenge.verified_at.is_(None),
         )
         .order_by(OtpChallenge.created_at.desc())
@@ -126,13 +121,13 @@ def verify_otp(db: Session, payload: OtpVerifyIn) -> AuthTokenOut:
 
     challenge.verified_at = now
 
-    user = db.query(User).filter(User.phone_normalized == phone_norm).one_or_none()
+    user = db.query(User).filter(User.email == email_norm).one_or_none()
     if not user:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User not found. Complete registration first.")
 
     user.is_verified = True
     user.is_active = True
-    user.phone_display = payload.phone.strip() or user.phone_display
+    user.email = email_norm
     _apply_admin_role(user)
 
     db.commit()

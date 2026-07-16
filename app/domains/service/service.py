@@ -25,6 +25,9 @@ from app.domains.service.schemas import (
     AppointmentDetailOut,
     AppointmentStatusActionIn,
     AppointmentUpdateIn,
+    CustomerAdditionalWorkDecisionIn,
+    CustomerAppointmentListItemOut,
+    CustomerServiceTrackOut,
     JobDetailOut,
     PaginatedHistoryOut,
     ServiceBayCreateIn,
@@ -227,6 +230,8 @@ def update_appointment(db: Session, appointment_id: str, payload: AppointmentUpd
             bay = db.get(ServiceBay, value)
             if not bay:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Bay not found")
+            if not bay.is_active:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Bay is inactive")
             if bay.branch_id != appt.branch_id:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Bay belongs to a different branch")
             appt.bay_id = bay.id
@@ -241,6 +246,8 @@ def update_appointment(db: Session, appointment_id: str, payload: AppointmentUpd
             tech = db.get(User, value)
             if not tech or tech.role not in (UserRole.staff, UserRole.admin):
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid technician")
+            if not tech.is_active:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Technician account is deactivated")
             appt.assigned_technician_id = tech.id
 
     if "estimated_completion" in data:
@@ -437,11 +444,16 @@ def update_additional_work(
         allowed = ", ".join(s.value for s in AdditionalWorkStatus)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid status. Allowed: {allowed}")
 
+    return _set_additional_work_status(db, job, work, new_status)
+
+
+def _set_additional_work_status(
+    db: Session, job: ServiceJob, work: AdditionalWorkRequest, new_status: AdditionalWorkStatus
+) -> JobDetailOut:
     work.status = new_status
     if new_status in (AdditionalWorkStatus.approved, AdditionalWorkStatus.rejected) and not work.customer_responded_at:
         work.customer_responded_at = datetime.now(timezone.utc)
 
-    # Once nothing is pending, resume the job (and the appointment).
     still_pending = any(w.status == AdditionalWorkStatus.pending_approval for w in job.additional_work)
     if not still_pending and job.status == ServiceJobStatus.awaiting_approval:
         job.status = ServiceJobStatus.in_progress
@@ -449,7 +461,79 @@ def update_additional_work(
             job.appointment.status = AppointmentStatus.in_progress
 
     db.commit()
-    return get_job(db, job_id)
+    return get_job(db, job.id)
+
+
+# --------------------------------------------------------------------------- #
+# Customer portal                                                             #
+# --------------------------------------------------------------------------- #
+
+_CUSTOMER_APPOINTMENT_LOADS = (
+    joinedload(ServiceAppointment.owned_vehicle),
+    joinedload(ServiceAppointment.branch),
+    joinedload(ServiceAppointment.job).selectinload(ServiceJob.additional_work),
+)
+
+
+def _get_customer_appointment(db: Session, customer_id: str, appointment_id: str) -> ServiceAppointment:
+    appt = (
+        db.query(ServiceAppointment)
+        .options(*_CUSTOMER_APPOINTMENT_LOADS)
+        .filter(ServiceAppointment.id == appointment_id, ServiceAppointment.user_id == customer_id)
+        .one_or_none()
+    )
+    if not appt:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Appointment not found")
+    return appt
+
+
+def list_customer_appointments(db: Session, customer_id: str) -> list[CustomerAppointmentListItemOut]:
+    rows = (
+        db.query(ServiceAppointment)
+        .options(*_CUSTOMER_APPOINTMENT_LOADS)
+        .filter(ServiceAppointment.user_id == customer_id)
+        .order_by(ServiceAppointment.scheduled_at.desc())
+        .limit(50)
+        .all()
+    )
+    return [CustomerAppointmentListItemOut.from_model(a) for a in rows]
+
+
+def get_customer_service_track(db: Session, customer_id: str, appointment_id: str) -> CustomerServiceTrackOut:
+    appt = _get_customer_appointment(db, customer_id, appointment_id)
+    job_out = get_job(db, appt.job.id) if appt.job else None
+    return CustomerServiceTrackOut(appointment=get_appointment(db, appointment_id), job=job_out)
+
+
+def customer_respond_additional_work(
+    db: Session,
+    customer_id: str,
+    job_id: str,
+    work_id: str,
+    payload: CustomerAdditionalWorkDecisionIn,
+) -> JobDetailOut:
+    job = _get_job(db, job_id)
+    if not job.appointment or job.appointment.user_id != customer_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
+    work = next((w for w in job.additional_work if w.id == work_id), None)
+    if not work:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Additional work not found")
+    if work.status != AdditionalWorkStatus.pending_approval:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This additional work request has already been responded to",
+        )
+
+    decision = payload.decision.strip().lower()
+    if decision == "approve":
+        new_status = AdditionalWorkStatus.approved
+    elif decision == "reject":
+        new_status = AdditionalWorkStatus.rejected
+    else:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid decision. Allowed: approve, reject")
+
+    return _set_additional_work_status(db, job, work, new_status)
 
 
 # --------------------------------------------------------------------------- #
