@@ -314,6 +314,17 @@ class CustomerAdditionalWorkDecisionIn(BaseModel):
     decision: str  # approve | reject
 
 
+class CustomerAppointmentCreateIn(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    owned_vehicle_id: str = Field(alias="ownedVehicleId")
+    branch_id: str = Field(alias="branchId")
+    service_type: str = Field(alias="serviceType")
+    scheduled_at: datetime = Field(alias="scheduledAt")
+    mileage_at_booking: int = Field(alias="mileageAtBooking", ge=0)
+    issue_description: str = Field(alias="issueDescription", min_length=5, max_length=2000)
+
+
 class CustomerAppointmentListItemOut(BaseModel):
     id: str
     vehicleId: str

@@ -26,6 +26,7 @@ from app.domains.service.schemas import (
     AppointmentStatusActionIn,
     AppointmentUpdateIn,
     CustomerAdditionalWorkDecisionIn,
+    CustomerAppointmentCreateIn,
     CustomerAppointmentListItemOut,
     CustomerServiceTrackOut,
     JobDetailOut,
@@ -41,6 +42,7 @@ from app.domains.service.schemas import (
 from app.domains.shared.enums import (
     AdditionalWorkStatus,
     AppointmentStatus,
+    BranchType,
     ServiceJobStatus,
     ServiceType,
 )
@@ -497,6 +499,74 @@ def list_customer_appointments(db: Session, customer_id: str) -> list[CustomerAp
         .all()
     )
     return [CustomerAppointmentListItemOut.from_model(a) for a in rows]
+
+
+def create_customer_appointment(
+    db: Session, user: User, payload: CustomerAppointmentCreateIn
+) -> CustomerAppointmentListItemOut:
+    vehicle = (
+        db.query(OwnedVehicle)
+        .filter(OwnedVehicle.id == payload.owned_vehicle_id, OwnedVehicle.user_id == user.id)
+        .one_or_none()
+    )
+    if not vehicle:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found")
+
+    branch = db.get(Branch, payload.branch_id)
+    if not branch or not branch.is_active:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Branch not found")
+    if branch.type == BranchType.showroom:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Select a service centre branch")
+
+    try:
+        service_type = ServiceType(payload.service_type.strip().lower())
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid service type") from exc
+
+    scheduled = payload.scheduled_at
+    if scheduled.tzinfo is None:
+        scheduled = scheduled.replace(tzinfo=timezone.utc)
+    if scheduled <= datetime.now(timezone.utc):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Scheduled time must be in the future")
+
+    appt = ServiceAppointment(
+        user_id=user.id,
+        owned_vehicle_id=vehicle.id,
+        branch_id=branch.id,
+        service_type=service_type,
+        scheduled_at=scheduled,
+        status=AppointmentStatus.requested,
+        issue_description=payload.issue_description.strip(),
+        mileage_at_booking=payload.mileage_at_booking,
+    )
+    db.add(appt)
+    db.commit()
+    loaded = (
+        db.query(ServiceAppointment)
+        .options(*_CUSTOMER_APPOINTMENT_LOADS)
+        .filter(ServiceAppointment.id == appt.id)
+        .one()
+    )
+    return CustomerAppointmentListItemOut.from_model(loaded)
+
+
+def list_customer_history(
+    db: Session,
+    customer_id: str,
+    *,
+    owned_vehicle_id: str | None = None,
+    page: int = 1,
+    size: int = 20,
+) -> PaginatedHistoryOut:
+    if owned_vehicle_id:
+        owned = (
+            db.query(OwnedVehicle)
+            .filter(OwnedVehicle.id == owned_vehicle_id, OwnedVehicle.user_id == customer_id)
+            .one_or_none()
+        )
+        if not owned:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found")
+    return list_history(db, customer_id=customer_id, owned_vehicle_id=owned_vehicle_id, page=page, size=size)
 
 
 def get_customer_service_track(db: Session, customer_id: str, appointment_id: str) -> CustomerServiceTrackOut:

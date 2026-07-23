@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.deps import CurrentUser
+from app.core.deps import CustomerUser
 from app.domains.notifications import service
 from app.domains.notifications.schemas import MarkAllReadOut, MarkReadOut, UserNotificationOut
 
@@ -11,7 +11,7 @@ router = APIRouter(prefix="/notifications", tags=["notifications"])
 
 @router.get("", response_model=list[UserNotificationOut])
 def list_notifications(
-    current_user: CurrentUser,
+    current_user: CustomerUser,
     unread_only: bool = Query(default=False, alias="unreadOnly"),
     db: Session = Depends(get_db),
 ) -> list[UserNotificationOut]:
@@ -19,7 +19,7 @@ def list_notifications(
 
 
 @router.post("/read-all", response_model=MarkAllReadOut)
-def mark_all_read(current_user: CurrentUser, db: Session = Depends(get_db)) -> MarkAllReadOut:
+def mark_all_read(current_user: CustomerUser, db: Session = Depends(get_db)) -> MarkAllReadOut:
     updated = service.mark_all_notifications_read(db, current_user.id)
     return MarkAllReadOut(updated=updated)
 
@@ -27,7 +27,7 @@ def mark_all_read(current_user: CurrentUser, db: Session = Depends(get_db)) -> M
 @router.post("/{notification_id}/read", response_model=MarkReadOut)
 def mark_read(
     notification_id: str,
-    current_user: CurrentUser,
+    current_user: CustomerUser,
     db: Session = Depends(get_db),
 ) -> MarkReadOut:
     return service.mark_notification_read(db, current_user.id, notification_id)

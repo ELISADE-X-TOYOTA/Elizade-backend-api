@@ -8,6 +8,7 @@ from app.domains.customers.models import CustomerNote, OwnedVehicle, WatchlistIt
 from app.domains.inventory.models import Vehicle, VehicleImage
 from app.domains.leads.models import Lead, LeadNote
 from app.domains.notifications.models import BroadcastCampaign, NotificationRule, UserNotification
+from app.domains.ownership.models import VehicleOwnershipRequest
 from app.domains.sales.models import (
     Quotation,
     QuotationLineItem,
@@ -59,6 +60,7 @@ __all__ = [
     "TradeInRequest",
     "User",
     "UserNotification",
+    "VehicleOwnershipRequest",
     "Vehicle",
     "VehicleImage",
     "WarrantyCertificate",

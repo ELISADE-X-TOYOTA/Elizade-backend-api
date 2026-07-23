@@ -41,6 +41,13 @@ def require_staff_portal(user: Annotated[User, Depends(get_current_user)]) -> Us
     return user
 
 
+def require_customer(user: Annotated[User, Depends(get_current_user)]) -> User:
+    if user.role != UserRole.customer:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Customer access only")
+    return user
+
+
 CurrentUser = Annotated[User, Depends(get_current_user)]
 CurrentAdmin = Annotated[User, Depends(require_admin)]
 StaffPortalUser = Annotated[User, Depends(require_staff_portal)]
+CustomerUser = Annotated[User, Depends(require_customer)]

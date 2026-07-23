@@ -55,6 +55,40 @@ class ClaimUpdateIn(BaseModel):
     assigned_to_id: str | None = Field(default=None, alias="assignedToId")
 
 
+class ClaimCreateIn(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    owned_vehicle_id: str = Field(alias="ownedVehicleId")
+    claim_type: str = Field(alias="claimType", min_length=2, max_length=200)
+    description: str = Field(min_length=10)
+    conditions: str | None = Field(default=None, max_length=2000)
+    current_mileage: int | None = Field(default=None, alias="currentMileage", ge=0)
+
+
+class WarrantyEligibilityOut(BaseModel):
+    eligible: bool
+    reason: str | None = None
+    inServiceDate: str | None = None
+    coverageEnd: str | None = None
+    mileageLimitKm: int
+    warrantyMonths: int
+    currentMileage: int
+    certificateNumber: str | None = None
+
+
+class CustomerRecallOut(BaseModel):
+    id: str
+    recallId: str
+    referenceCode: str
+    title: str
+    description: str
+    severity: str
+    vehicleLabel: str
+    notifiedAt: str | None = None
+    serviceCompletedAt: str | None = None
+    isActive: bool
+
+
 class WarrantySummaryOut(BaseModel):
     pendingClaims: int
     activeCertificates: int

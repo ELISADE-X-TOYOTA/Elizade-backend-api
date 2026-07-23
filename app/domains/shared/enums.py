@@ -142,6 +142,14 @@ class TradeInStatus(str, enum.Enum):
     rejected = "rejected"
 
 
+class OwnershipRequestStatus(str, enum.Enum):
+    pending = "pending"
+    pending_documents = "pending_documents"
+    under_review = "under_review"
+    approved = "approved"
+    rejected = "rejected"
+
+
 class NotificationCategory(str, enum.Enum):
     service = "service"
     sales = "sales"

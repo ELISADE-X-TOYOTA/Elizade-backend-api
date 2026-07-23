@@ -19,6 +19,12 @@ from app.domains.support.schemas import (
     TicketMessageOut,
     TicketUpdateIn,
 )
+from app.domains.support.customer_schemas import (
+    CustomerTicketCreateIn,
+    CustomerTicketDetailOut,
+    CustomerTicketListOut,
+    CustomerTicketMessageCreateOut,
+)
 from app.domains.users.models import User, UserRole
 
 OPEN_STATUSES = (
@@ -292,3 +298,105 @@ def resolve_ticket(db: Session, ticket_id: str) -> SupportTicketDetailOut:
     ticket.resolved_at = datetime.now(timezone.utc)
     db.commit()
     return get_ticket(db, ticket_id)
+
+
+def _get_customer_ticket(db: Session, user_id: str, ticket_id: str) -> SupportTicket:
+    ticket = (
+        db.query(SupportTicket)
+        .options(
+            joinedload(SupportTicket.customer),
+            joinedload(SupportTicket.assigned_to),
+            joinedload(SupportTicket.messages).joinedload(TicketMessage.sender),
+        )
+        .filter(SupportTicket.id == ticket_id, SupportTicket.user_id == user_id)
+        .one_or_none()
+    )
+    if not ticket:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
+    return ticket
+
+
+def create_customer_ticket(db: Session, user: User, payload: CustomerTicketCreateIn) -> CustomerTicketDetailOut:
+    try:
+        category = TicketCategory(payload.category.strip().lower())
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid category") from exc
+
+    try:
+        priority = TicketPriority(payload.priority.strip().lower())
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid priority") from exc
+
+    sla = db.query(SlaConfig).filter(SlaConfig.category == category, SlaConfig.is_active.is_(True)).one_or_none()
+    response_hours = sla.response_hours if sla else 8
+    resolution_hours = sla.resolution_hours if sla else 72
+
+    now = datetime.now(timezone.utc)
+    ticket = SupportTicket(
+        ticket_number=_next_ticket_number(db),
+        user_id=user.id,
+        category=category,
+        subject=payload.subject.strip(),
+        status=TicketStatus.open,
+        priority=priority,
+        first_response_due=now + timedelta(hours=response_hours),
+        resolution_due=now + timedelta(hours=resolution_hours),
+        sla_status=SlaStatus.ok,
+    )
+    db.add(ticket)
+    db.flush()
+    db.add(
+        TicketMessage(
+            ticket_id=ticket.id,
+            sender_type=MessageSender.customer,
+            sender_id=user.id,
+            body=payload.body.strip(),
+        )
+    )
+    db.commit()
+    return CustomerTicketDetailOut.from_model(_get_customer_ticket(db, user.id, ticket.id))
+
+
+def list_customer_tickets(db: Session, user_id: str) -> list[CustomerTicketListOut]:
+    rows = (
+        db.query(SupportTicket)
+        .options(joinedload(SupportTicket.customer), joinedload(SupportTicket.assigned_to))
+        .filter(SupportTicket.user_id == user_id)
+        .order_by(SupportTicket.updated_at.desc())
+        .limit(50)
+        .all()
+    )
+    return [CustomerTicketListOut.from_model(r) for r in rows]
+
+
+def get_customer_ticket(db: Session, user_id: str, ticket_id: str) -> CustomerTicketDetailOut:
+    return CustomerTicketDetailOut.from_model(_get_customer_ticket(db, user_id, ticket_id))
+
+
+def add_customer_message(db: Session, user_id: str, ticket_id: str, body: str) -> CustomerTicketMessageCreateOut:
+    ticket = _get_customer_ticket(db, user_id, ticket_id)
+    if ticket.status in (TicketStatus.resolved, TicketStatus.closed):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Ticket is closed")
+
+    message = TicketMessage(
+        ticket_id=ticket.id,
+        sender_type=MessageSender.customer,
+        sender_id=user_id,
+        body=body.strip(),
+    )
+    db.add(message)
+    if ticket.status == TicketStatus.waiting_customer:
+        ticket.status = TicketStatus.in_progress
+    db.commit()
+    detail = CustomerTicketDetailOut.from_model(_get_customer_ticket(db, user_id, ticket_id))
+    latest = detail.messages[-1]
+    return CustomerTicketMessageCreateOut(ticket=detail, message=latest)
+
+
+def rate_customer_ticket(db: Session, user_id: str, ticket_id: str, rating: int) -> CustomerTicketDetailOut:
+    ticket = _get_customer_ticket(db, user_id, ticket_id)
+    if ticket.status not in (TicketStatus.resolved, TicketStatus.closed):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ticket must be resolved before rating")
+    ticket.satisfaction_rating = rating
+    db.commit()
+    return CustomerTicketDetailOut.from_model(_get_customer_ticket(db, user_id, ticket_id))

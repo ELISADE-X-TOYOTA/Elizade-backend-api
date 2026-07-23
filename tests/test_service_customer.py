@@ -41,10 +41,10 @@ def test_track_appointment_with_job(client, customer_headers, staff_headers, app
 
 
 def test_track_other_customer_appointment_404(
-    client, customer_headers, staff_headers, appointment_factory, db_session,
+    client, customer_headers, staff_headers, appointment_factory, owned_vehicle_factory, db_session,
 ):
-    from app.domains.shared.enums import UserRole
-    from conftest import _make_user
+    from app.domains.users.models import UserRole
+    from tests.conftest import _make_user
 
     other = _make_user(
         db_session,
@@ -54,7 +54,8 @@ def test_track_other_customer_appointment_404(
         first="Other",
         last="User",
     )
-    appt = appointment_factory(user_id=other.id)
+    other_vehicle = owned_vehicle_factory(owner=other)
+    appt = appointment_factory(user_id=other.id, owned_vehicle=other_vehicle)
     client.patch(f"{ADMIN_APPT}/{appt.id}/status", json={"action": "start"}, headers=staff_headers)
     assert client.get(f"{CUSTOMER_SERVICE}/appointments/{appt.id}/track", headers=customer_headers).status_code == 404
 

@@ -49,6 +49,10 @@ _uploads = Path("uploads/vehicles")
 _uploads.mkdir(parents=True, exist_ok=True)
 app.mount("/media/vehicles", StaticFiles(directory=str(_uploads)), name="vehicle-media")
 
+_docs = Path("uploads/documents")
+_docs.mkdir(parents=True, exist_ok=True)
+app.mount("/media/documents", StaticFiles(directory=str(_docs)), name="document-media")
+
 
 @app.get("/health")
 def health() -> dict[str, str]:

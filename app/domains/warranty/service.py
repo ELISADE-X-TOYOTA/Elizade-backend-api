@@ -15,8 +15,16 @@ from app.domains.shared.enums import (
 )
 from app.domains.users.models import User, UserRole
 from app.domains.warranty.models import RecallCampaign, RecallVehicle, WarrantyCertificate, WarrantyClaim
+from app.domains.warranty.policy import (
+    BASIC_WARRANTY_KM,
+    BASIC_WARRANTY_MONTHS,
+    DEFAULT_COVERAGE_DETAILS,
+    is_within_basic_warranty,
+    warranty_end_from_in_service,
+)
 from app.domains.warranty.schemas import (
     CertificateCreateIn,
+    ClaimCreateIn,
     ClaimUpdateIn,
     OwnedVehicleOptionOut,
     PaginatedClaimsOut,
@@ -186,10 +194,12 @@ def create_certificate(db: Session, payload: CertificateCreateIn, *, issued_by_i
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid certificate type") from exc
 
     now = datetime.now(timezone.utc)
-    coverage_start = now
-    coverage_end = now + timedelta(days=365 if cert_type == WarrantyCertificateType.standard else 730)
+    in_service = vehicle.purchase_date or now
+    coverage_start = in_service
+    coverage_end = warranty_end_from_in_service(in_service)
     if payload.coverage_start:
         coverage_start = datetime.fromisoformat(payload.coverage_start.replace("Z", "+00:00"))
+        coverage_end = warranty_end_from_in_service(coverage_start)
     if payload.coverage_end:
         coverage_end = datetime.fromisoformat(payload.coverage_end.replace("Z", "+00:00"))
 
@@ -202,7 +212,7 @@ def create_certificate(db: Session, payload: CertificateCreateIn, *, issued_by_i
         coverage_start=coverage_start,
         coverage_end=coverage_end,
         status=WarrantyCertificateStatus.active,
-        coverage_details=payload.coverage_details or ["Engine", "Transmission", "Electrical"],
+        coverage_details=payload.coverage_details or DEFAULT_COVERAGE_DETAILS,
         issued_by_id=issued_by_id,
     )
     db.add(row)
@@ -340,3 +350,183 @@ def notify_recall(db: Session, recall_id: str) -> RecallNotifyOut:
 
     db.commit()
     return RecallNotifyOut(recall=_recall_out(db, recall), notifiedCount=len(pending))
+
+
+def issue_standard_certificate(
+    db: Session,
+    vehicle: OwnedVehicle,
+    *,
+    issued_by_id: str | None = None,
+) -> WarrantyCertificate | None:
+    """Issue Toyota basic warranty certificate from in-service date if none exists."""
+    existing = (
+        db.query(WarrantyCertificate)
+        .filter(
+            WarrantyCertificate.owned_vehicle_id == vehicle.id,
+            WarrantyCertificate.status == WarrantyCertificateStatus.active,
+        )
+        .first()
+    )
+    if existing:
+        return existing
+
+    in_service = vehicle.purchase_date or datetime.now(timezone.utc)
+    cert_number = f"ELZ-WTY-{uuid.uuid4().hex[:8].upper()}"
+    row = WarrantyCertificate(
+        owned_vehicle_id=vehicle.id,
+        user_id=vehicle.user_id,
+        certificate_number=cert_number,
+        type=WarrantyCertificateType.standard,
+        coverage_start=in_service,
+        coverage_end=warranty_end_from_in_service(in_service),
+        status=WarrantyCertificateStatus.active,
+        coverage_details=DEFAULT_COVERAGE_DETAILS,
+        issued_by_id=issued_by_id,
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+def list_customer_certificates(db: Session, user_id: str) -> list[WarrantyCertificateOut]:
+    rows = (
+        db.query(WarrantyCertificate)
+        .options(
+            joinedload(WarrantyCertificate.customer),
+            joinedload(WarrantyCertificate.owned_vehicle),
+        )
+        .filter(WarrantyCertificate.user_id == user_id)
+        .order_by(WarrantyCertificate.created_at.desc())
+        .all()
+    )
+    return [WarrantyCertificateOut.from_model(r) for r in rows]
+
+
+def list_customer_claims(db: Session, user_id: str) -> list[WarrantyClaimListItemOut]:
+    rows = (
+        db.query(WarrantyClaim)
+        .options(
+            joinedload(WarrantyClaim.customer),
+            joinedload(WarrantyClaim.owned_vehicle),
+            joinedload(WarrantyClaim.assigned_to),
+        )
+        .filter(WarrantyClaim.user_id == user_id)
+        .order_by(WarrantyClaim.created_at.desc())
+        .all()
+    )
+    return [WarrantyClaimListItemOut.from_model(r) for r in rows]
+
+
+def check_eligibility(db: Session, user_id: str, owned_vehicle_id: str) -> dict:
+    vehicle = (
+        db.query(OwnedVehicle)
+        .filter(OwnedVehicle.id == owned_vehicle_id, OwnedVehicle.user_id == user_id)
+        .one_or_none()
+    )
+    if not vehicle:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found")
+
+    eligible, reason = is_within_basic_warranty(
+        in_service_date=vehicle.purchase_date,
+        current_mileage=vehicle.mileage,
+    )
+    cert = (
+        db.query(WarrantyCertificate)
+        .filter(
+            WarrantyCertificate.owned_vehicle_id == vehicle.id,
+            WarrantyCertificate.status == WarrantyCertificateStatus.active,
+        )
+        .order_by(WarrantyCertificate.created_at.desc())
+        .first()
+    )
+    return {
+        "eligible": eligible,
+        "reason": reason,
+        "inServiceDate": vehicle.purchase_date.isoformat() if vehicle.purchase_date else None,
+        "coverageEnd": cert.coverage_end.isoformat() if cert else None,
+        "mileageLimitKm": BASIC_WARRANTY_KM,
+        "warrantyMonths": BASIC_WARRANTY_MONTHS,
+        "currentMileage": vehicle.mileage,
+        "certificateNumber": cert.certificate_number if cert else None,
+    }
+
+
+def submit_customer_claim(db: Session, user_id: str, payload: ClaimCreateIn) -> WarrantyClaimListItemOut:
+    vehicle = (
+        db.query(OwnedVehicle)
+        .filter(OwnedVehicle.id == payload.owned_vehicle_id, OwnedVehicle.user_id == user_id)
+        .one_or_none()
+    )
+    if not vehicle:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found")
+
+    mileage = payload.current_mileage if payload.current_mileage is not None else vehicle.mileage
+    eligible, reason = is_within_basic_warranty(
+        in_service_date=vehicle.purchase_date,
+        current_mileage=mileage,
+    )
+    if not eligible:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=reason or "Not eligible")
+
+    cert = (
+        db.query(WarrantyCertificate)
+        .filter(
+            WarrantyCertificate.owned_vehicle_id == vehicle.id,
+            WarrantyCertificate.status == WarrantyCertificateStatus.active,
+        )
+        .first()
+    )
+
+    claim = WarrantyClaim(
+        user_id=user_id,
+        owned_vehicle_id=vehicle.id,
+        certificate_id=cert.id if cert else None,
+        claim_type=payload.claim_type.strip(),
+        description=payload.description.strip(),
+        conditions=(payload.conditions or "").strip() or None,
+        current_mileage=mileage,
+        status=ClaimStatus.submitted,
+    )
+    db.add(claim)
+    db.commit()
+
+    loaded = (
+        db.query(WarrantyClaim)
+        .options(
+            joinedload(WarrantyClaim.customer),
+            joinedload(WarrantyClaim.owned_vehicle),
+            joinedload(WarrantyClaim.assigned_to),
+        )
+        .filter(WarrantyClaim.id == claim.id)
+        .one()
+    )
+    return WarrantyClaimListItemOut.from_model(loaded)
+
+
+def list_customer_recalls(db: Session, user_id: str) -> list[dict]:
+    rows = (
+        db.query(RecallVehicle)
+        .options(joinedload(RecallVehicle.recall), joinedload(RecallVehicle.owned_vehicle))
+        .filter(RecallVehicle.user_id == user_id)
+        .order_by(RecallVehicle.created_at.desc())
+        .all()
+    )
+    results = []
+    for row in rows:
+        recall = row.recall
+        vehicle = row.owned_vehicle
+        results.append(
+            {
+                "id": row.id,
+                "recallId": recall.id,
+                "referenceCode": recall.reference_code,
+                "title": recall.title,
+                "description": recall.description,
+                "severity": recall.severity.value,
+                "vehicleLabel": f"{vehicle.year} {vehicle.make} {vehicle.model}",
+                "notifiedAt": row.notified_at.isoformat() if row.notified_at else None,
+                "serviceCompletedAt": row.service_completed_at.isoformat() if row.service_completed_at else None,
+                "isActive": recall.is_active,
+            }
+        )
+    return results
