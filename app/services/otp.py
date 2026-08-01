@@ -1,12 +1,16 @@
+import logging
 import sys
 from datetime import datetime, timedelta, timezone
 
+from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.security import generate_otp_code, hash_otp, normalize_email
 from app.domains.users.models import OtpChallenge, OtpPurpose
-from app.services.email import MockEmailService, email_service
+from app.services.email import EmailDeliveryError, MockEmailService, email_service
+
+logger = logging.getLogger("elizade.otp")
 
 settings = get_settings()
 MAX_OTP_ATTEMPTS = 5
@@ -57,5 +61,17 @@ def create_and_dispatch_otp(
     db.add(challenge)
     db.commit()
 
-    email_service.send_otp(email_norm, code, purpose.value)
+    # The challenge is already persisted, so a delivery failure is reported
+    # rather than swallowed — otherwise the user waits for a code that will
+    # never arrive. Requesting again simply supersedes this challenge.
+    try:
+        email_service.send_otp(email_norm, code, purpose.value)
+    except EmailDeliveryError as exc:
+        logger.error("OTP dispatch failed for %s (%s): %s", email_norm, purpose.value, exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="We couldn't send your verification code. Please try again shortly.",
+        ) from exc
+
+    logger.info("OTP dispatched to %s (%s)", email_norm, purpose.value)
     _print_otp_dev_fallback(email_norm, code, purpose.value)

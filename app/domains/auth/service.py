@@ -55,6 +55,7 @@ def request_otp(db: Session, payload: OtpRequestIn) -> OtpRequestOut:
                 phone_display=phone_display,
                 first_name=payload.first_name.strip(),
                 last_name=payload.last_name.strip(),
+                other_name=(payload.other_name or "").strip() or None,
                 email=email_norm,
                 role=UserRole.customer,
                 is_verified=False,
@@ -67,6 +68,8 @@ def request_otp(db: Session, payload: OtpRequestIn) -> OtpRequestOut:
         else:
             user.first_name = payload.first_name.strip()
             user.last_name = payload.last_name.strip()
+            if payload.other_name is not None:
+                user.other_name = payload.other_name.strip() or None
             user.email = email_norm
             if user.role == UserRole.customer or not user.is_verified:
                 user.role = UserRole.customer

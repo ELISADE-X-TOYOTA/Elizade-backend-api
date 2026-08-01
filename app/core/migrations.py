@@ -5,6 +5,23 @@ from sqlalchemy.engine import Engine
 
 
 def run_startup_migrations(engine: Engine) -> None:
+    _add_users_other_name(engine)
+    _migrate_otp_to_email(engine)
+
+
+def _add_users_other_name(engine: Engine) -> None:
+    """Optional middle/other name captured during registration."""
+    inspector = inspect(engine)
+    if not inspector.has_table("users"):
+        return
+    columns = {col["name"] for col in inspector.get_columns("users")}
+    if "other_name" in columns:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE users ADD COLUMN other_name VARCHAR(100)"))
+
+
+def _migrate_otp_to_email(engine: Engine) -> None:
     inspector = inspect(engine)
     if not inspector.has_table("otp_challenges"):
         return
