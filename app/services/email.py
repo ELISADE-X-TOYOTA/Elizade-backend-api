@@ -61,6 +61,22 @@ class MockEmailService(EmailService):
 
     def send_otp(self, to_email: str, code: str, purpose: str) -> None:
         self.send_notification(to_email=to_email, **_otp_payload(code, purpose))
+        # The code lives in `body`/`html_body`, neither of which the generic
+        # notification print emits — so without this the dev console showed the
+        # subject line and no way to actually sign in. Printed to stdout only,
+        # never through `logger`, because logs commonly ship to an aggregator
+        # and a one-time passcode has no business leaving the machine.
+        #
+        # Reachable only via MockEmailService, i.e. only when SMTP is
+        # unconfigured. Configure SMTP and this transport is never constructed.
+        print(
+            f"\n{'=' * 58}\n"
+            f"  OTP for {to_email}  ({purpose})\n"
+            f"  CODE: {code}\n"
+            f"{'=' * 58}\n",
+            file=sys.stdout,
+            flush=True,
+        )
 
     def send_notification(
         self,

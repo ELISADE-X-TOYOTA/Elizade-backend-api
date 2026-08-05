@@ -27,3 +27,11 @@ class AuthTokenOut(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserProfileOut
+
+
+class EmailAvailabilityOut(BaseModel):
+    """Whether an email can be used to register a new account."""
+
+    email: EmailStr
+    available: bool
+    reason: str | None = None

@@ -46,7 +46,7 @@ def request_otp(db: Session, payload: OtpRequestIn) -> OtpRequestOut:
         if user and user.is_verified:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Account already exists. Please sign in.",
+                detail="Account already exists.",
             )
         phone_norm, phone_display = placeholder_phone_for_email(email_norm)
         if not user:
@@ -142,3 +142,18 @@ def verify_otp(db: Session, payload: OtpVerifyIn) -> AuthTokenOut:
 
 def get_me(user: User) -> UserProfileOut:
     return UserProfileOut.from_user(user)
+
+
+def check_email_available(db: Session, email: str) -> tuple[bool, str | None]:
+    """Can this email start a registration?
+
+    Mirrors the 409 rule in `request_otp` exactly: only a *verified* account
+    blocks re-registration, so an abandoned unverified signup can be resumed.
+    Kept read-only and side-effect free so the client can call it while the
+    user types, without dispatching an OTP.
+    """
+    email_norm = normalize_email(email)
+    user = db.query(User).filter(User.email == email_norm).one_or_none()
+    if user and user.is_verified:
+        return False, "Account already exists."
+    return True, None
