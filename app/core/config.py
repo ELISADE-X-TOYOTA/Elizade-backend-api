@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     smtp_from_email: str = "noreply@meristemng.com"
     smtp_use_tls: bool = True
 
+    # Shown in transactional email (footer / support links).
+    support_email: str = "support@elizade.com"
+    support_phone: str = "+234 700 354 9233"
+    support_url: str = "https://elizade.com/contact"
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

@@ -44,6 +44,7 @@ class UserProfileOut(BaseModel):
     id: str
     firstName: str
     lastName: str
+    otherName: str | None = None
     email: str
     phone: str
     city: str
@@ -60,6 +61,7 @@ class UserProfileOut(BaseModel):
             id=user.id,
             firstName=user.first_name,
             lastName=user.last_name,
+            otherName=user.other_name,
             email=email,
             phone=user.phone_display,
             city=user.city,

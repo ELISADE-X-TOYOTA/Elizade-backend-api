@@ -12,6 +12,19 @@ _ALLOWED = {
     "application/pdf": "pdf",
 }
 
+#: Extensions we will write, derived from the allowlist above.
+#:
+#: SECURITY: the extension decides how the static mount serves the file back.
+#: `_extension` used to trust the uploaded filename, so `invoice.html` was
+#: stored as `<uuid>.html` and served as text/html from our own origin — stored
+#: XSS against anything sharing it (the admin panel). SVG is excluded for the
+#: same reason: it is an image to users and a script host to browsers.
+_ALLOWED_EXTENSIONS = set(_ALLOWED.values())
+
+
+class UnsupportedFileType(ValueError):
+    """Raised when an upload is not an allowed image or PDF."""
+
 
 @runtime_checkable
 class StorageBackend(Protocol):
@@ -27,9 +40,26 @@ class LocalStorage:
 
     @staticmethod
     def _extension(filename: str | None, content_type: str | None) -> str:
-        if filename and "." in filename:
-            return filename.rsplit(".", 1)[1].lower()
-        return _ALLOWED.get((content_type or "").lower(), "bin")
+        """Resolve a SAFE extension, or refuse the upload.
+
+        Content type is trusted over the filename: a client that sends
+        `image/png` gets `.png` regardless of what the file claims to be
+        called. The filename is only consulted when the content type is
+        missing or generic (`application/octet-stream`), and even then it must
+        land in the allowlist.
+        """
+        declared = (content_type or "").lower().split(";")[0].strip()
+        if declared in _ALLOWED:
+            return _ALLOWED[declared]
+
+        suffix = filename.rsplit(".", 1)[1].lower() if filename and "." in filename else ""
+        if suffix in _ALLOWED_EXTENSIONS:
+            return suffix
+
+        raise UnsupportedFileType(
+            f"Unsupported file type '{declared or suffix or 'unknown'}'. "
+            "Allowed: JPEG, PNG, WebP, PDF."
+        )
 
     def save(self, *, content: bytes, filename: str | None, content_type: str | None) -> str:
         self.base_dir.mkdir(parents=True, exist_ok=True)
