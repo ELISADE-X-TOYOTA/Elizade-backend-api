@@ -1,7 +1,8 @@
 import math
+import re
 from datetime import datetime, timedelta, timezone
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException, UploadFile, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
@@ -19,7 +20,9 @@ from app.domains.support.schemas import (
     TicketMessageOut,
     TicketUpdateIn,
 )
+from app.domains.ownership.storage import UnsupportedFileType, storage
 from app.domains.support.customer_schemas import (
+    AttachmentUploadOut,
     CustomerTicketCreateIn,
     CustomerTicketDetailOut,
     CustomerTicketListOut,
@@ -351,6 +354,10 @@ def create_customer_ticket(db: Session, user: User, payload: CustomerTicketCreat
             sender_type=MessageSender.customer,
             sender_id=user.id,
             body=payload.body.strip(),
+            # Evidence usually arrives WITH the report (a dashboard warning
+            # light, a damaged part), so the opening message carries them too —
+            # not only follow-up replies.
+            attachments=_validate_attachments(payload.attachments or []),
         )
     )
     db.commit()
@@ -373,23 +380,105 @@ def get_customer_ticket(db: Session, user_id: str, ticket_id: str) -> CustomerTi
     return CustomerTicketDetailOut.from_model(_get_customer_ticket(db, user_id, ticket_id))
 
 
-def add_customer_message(db: Session, user_id: str, ticket_id: str, body: str) -> CustomerTicketMessageCreateOut:
+#: Prefix of every URL our own document storage hands out.
+_ATTACHMENT_URL_PREFIX = "/media/documents/"
+#: Storage keys are `<uuid-hex>.<ext>` — nothing else is ours.
+_ATTACHMENT_KEY = re.compile(r"^[0-9a-f]{32}\.[a-z0-9]{1,5}$")
+
+
+#: Matches the ownership document cap — same store, same limit.
+_MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
+
+
+def upload_attachment(file: UploadFile) -> AttachmentUploadOut:
+    """Store one reply attachment and hand back its URL.
+
+    Reuses the shared document storage (`/media/documents`) rather than
+    standing up a second bucket and static mount — it already enforces the
+    image/PDF allowlist, which is what keeps an uploaded `.html` from being
+    served back as script from our own origin.
+    """
+    content = file.file.read()
+    if len(content) > _MAX_ATTACHMENT_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="File too large (max 10MB)",
+        )
+    if not content:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file")
+    try:
+        url = storage.save(content=content, filename=file.filename, content_type=file.content_type)
+    except UnsupportedFileType as exc:
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=str(exc)) from exc
+    return AttachmentUploadOut(url=url)
+
+
+def _validate_attachments(urls: list[str]) -> list[str]:
+    """Accept only URLs this API issued, preserving order and dropping repeats.
+
+    SECURITY: without this the field is an arbitrary-URL sink. A customer could
+    reply with `https://attacker.example/pixel.png`, and the staff console would
+    dutifully render it — leaking agent IPs and read receipts, or serving
+    something worse. Requiring our own storage prefix AND the uuid key shape
+    means a stored attachment can only ever be a file that came through
+    `POST /support/attachments/upload`, which is itself content-type checked.
+    """
+    cleaned: list[str] = []
+    for raw in urls:
+        url = (raw or "").strip()
+        if not url:
+            continue
+        if not url.startswith(_ATTACHMENT_URL_PREFIX):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Attachments must be uploaded via /support/attachments/upload",
+            )
+        key = url[len(_ATTACHMENT_URL_PREFIX) :]
+        if not _ATTACHMENT_KEY.match(key):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid attachment reference")
+        if url not in cleaned:
+            cleaned.append(url)
+    return cleaned
+
+
+def add_customer_message(
+    db: Session,
+    user_id: str,
+    ticket_id: str,
+    body: str,
+    attachments: list[str] | None = None,
+) -> CustomerTicketMessageCreateOut:
     ticket = _get_customer_ticket(db, user_id, ticket_id)
     if ticket.status in (TicketStatus.resolved, TicketStatus.closed):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Ticket is closed")
+
+    files = _validate_attachments(attachments or [])
+    text = body.strip()
+    # A photo on its own is a complete reply; nothing at all is not.
+    if not text and not files:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Add a message or at least one attachment",
+        )
 
     message = TicketMessage(
         ticket_id=ticket.id,
         sender_type=MessageSender.customer,
         sender_id=user_id,
-        body=body.strip(),
+        body=text,
+        attachments=files,
     )
     db.add(message)
     if ticket.status == TicketStatus.waiting_customer:
         ticket.status = TicketStatus.in_progress
     db.commit()
+    db.refresh(message)
     detail = CustomerTicketDetailOut.from_model(_get_customer_ticket(db, user_id, ticket_id))
-    latest = detail.messages[-1]
+    # Serialise the row we actually created, rather than assuming it sorts last.
+    # `created_at` defaults to `now()`, which in Postgres is TRANSACTION time —
+    # so two messages written in one transaction carry identical timestamps and
+    # `messages[-1]` can return the wrong one.
+    latest = TicketMessageOut.from_model(message)
     return CustomerTicketMessageCreateOut(ticket=detail, message=latest)
 
 

@@ -26,6 +26,7 @@ class TicketMessageOut(BaseModel):
     senderType: str
     senderName: str | None = None
     body: str
+    attachments: list[str] = []
     createdAt: str
 
     @staticmethod
@@ -38,6 +39,9 @@ class TicketMessageOut(BaseModel):
             senderType=row.sender_type.value,
             senderName=sender_name,
             body=row.body,
+            # `or []` guards rows written before the column existed, where the
+            # backfill has not run (e.g. a restored dump).
+            attachments=list(row.attachments or []),
             createdAt=row.created_at.isoformat(),
         )
 

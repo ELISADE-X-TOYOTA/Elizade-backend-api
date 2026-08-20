@@ -21,7 +21,7 @@ from app.domains.ownership.schemas import (
     VinLookupOut,
     _normalize_vin,
 )
-from app.domains.ownership.storage import storage
+from app.domains.ownership.storage import UnsupportedFileType, storage
 from app.domains.shared.enums import AvailabilityStatus, OwnershipRequestStatus
 from app.domains.users.models import User, UserRole
 from app.domains.warranty import service as warranty_service
@@ -189,7 +189,10 @@ def upload_document(file: UploadFile) -> DocumentUploadOut:
     content = file.file.read()
     if len(content) > 10 * 1024 * 1024:
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="File too large (max 10MB)")
-    url = storage.save(content=content, filename=file.filename, content_type=file.content_type)
+    try:
+        url = storage.save(content=content, filename=file.filename, content_type=file.content_type)
+    except UnsupportedFileType as exc:
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=str(exc)) from exc
     return DocumentUploadOut(url=url)
 
 

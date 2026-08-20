@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -68,7 +68,12 @@ class SupportTicket(Base):
         back_populates="assigned_tickets", foreign_keys=[assigned_to_id]
     )
     messages: Mapped[list["TicketMessage"]] = relationship(
-        back_populates="ticket", cascade="all, delete-orphan", order_by="TicketMessage.created_at"
+        back_populates="ticket",
+        cascade="all, delete-orphan",
+        # `id` breaks ties: `created_at` defaults to `now()`, which is constant
+        # across a transaction, so timestamp alone leaves thread order undefined
+        # whenever two messages are written together.
+        order_by="TicketMessage.created_at, TicketMessage.id",
     )
 
 
@@ -82,6 +87,10 @@ class TicketMessage(Base):
     sender_type: Mapped[MessageSender] = mapped_column(Enum(MessageSender, name="message_sender"), nullable=False)
     sender_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=True)
     body: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Media URLs produced by ``POST /support/attachments/upload``. Stored as a
+    #: JSONB list to match ``VehicleOwnershipRequest.document_urls`` rather than
+    #: introducing a second, differently-shaped attachment concept.
+    attachments: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     ticket: Mapped["SupportTicket"] = relationship(back_populates="messages")
