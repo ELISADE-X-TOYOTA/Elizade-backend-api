@@ -7,6 +7,7 @@ from app.domains.ownership import service as ownership_service
 from app.domains.ownership.schemas import DocumentUploadOut
 from app.domains.support import service
 from app.domains.support.customer_schemas import (
+    AttachmentUploadOut,
     CustomerTicketCreateIn,
     CustomerTicketDetailOut,
     CustomerTicketListOut,
@@ -59,7 +60,23 @@ def reply_to_ticket(
     current_user: CustomerUser,
     db: Session = Depends(get_db),
 ) -> CustomerTicketMessageCreateOut:
-    return service.add_customer_message(db, current_user.id, ticket_id, payload.body)
+    return service.add_customer_message(
+        db, current_user.id, ticket_id, payload.body, payload.attachments
+    )
+
+
+@router.post("/attachments/upload", response_model=AttachmentUploadOut)
+def upload_attachment(
+    current_user: CustomerUser,
+    file: UploadFile = File(...),
+) -> AttachmentUploadOut:
+    """Store a file and return its URL, for use in a reply's `attachments`.
+
+    Two-step (upload, then send the URL with the message) mirrors
+    `/ownership/documents/upload`, and lets a client attach several files to
+    one reply without a multipart body per message.
+    """
+    return service.upload_attachment(file)
 
 
 @router.post("/tickets/{ticket_id}/rate", response_model=CustomerTicketDetailOut)
