@@ -452,6 +452,9 @@ def check_eligibility(db: Session, user_id: str, owned_vehicle_id: str) -> dict:
 
 
 def submit_customer_claim(db: Session, user_id: str, payload: ClaimCreateIn) -> WarrantyClaimListItemOut:
+    from app.domains.shared.documents import normalize_document_urls
+
+    attachment_urls = normalize_document_urls(payload.attachment_urls)
     vehicle = (
         db.query(OwnedVehicle)
         .filter(OwnedVehicle.id == payload.owned_vehicle_id, OwnedVehicle.user_id == user_id)
@@ -485,6 +488,7 @@ def submit_customer_claim(db: Session, user_id: str, payload: ClaimCreateIn) -> 
         description=payload.description.strip(),
         conditions=(payload.conditions or "").strip() or None,
         current_mileage=mileage,
+        attachment_urls=attachment_urls,
         status=ClaimStatus.submitted,
     )
     db.add(claim)

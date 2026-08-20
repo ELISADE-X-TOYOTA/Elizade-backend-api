@@ -246,6 +246,9 @@ def list_my_trade_ins(db: Session, user_id: str) -> list[TradeInOut]:
 
 
 def submit_trade_in(db: Session, user: User, payload: TradeInCreateIn) -> TradeInOut:
+    from app.domains.shared.documents import normalize_document_urls
+
+    photo_urls = normalize_document_urls(payload.photo_urls)
     lead = Lead(
         customer_id=user.id,
         customer_name=f"{user.first_name} {user.last_name}".strip() or user.phone_display,
@@ -266,6 +269,7 @@ def submit_trade_in(db: Session, user: User, payload: TradeInCreateIn) -> TradeI
         year=payload.year,
         mileage=payload.mileage,
         condition_notes=payload.condition_notes.strip(),
+        photo_urls=photo_urls,
         status=TradeInStatus.submitted,
     )
     db.add(row)

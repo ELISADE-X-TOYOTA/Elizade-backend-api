@@ -5,6 +5,7 @@ class WarrantyClaimListItemOut(BaseModel):
     id: str
     claimType: str
     description: str
+    attachmentUrls: list[str] = Field(default_factory=list)
     status: str
     customerId: str
     customerName: str
@@ -27,6 +28,7 @@ class WarrantyClaimListItemOut(BaseModel):
             id=claim.id,
             claimType=claim.claim_type,
             description=claim.description,
+            attachmentUrls=list(claim.attachment_urls or []),
             status=claim.status.value,
             customerId=claim.user_id,
             customerName=customer_name,
@@ -63,6 +65,7 @@ class ClaimCreateIn(BaseModel):
     description: str = Field(min_length=10)
     conditions: str | None = Field(default=None, max_length=2000)
     current_mileage: int | None = Field(default=None, alias="currentMileage", ge=0)
+    attachment_urls: list[str] = Field(default_factory=list, alias="attachmentUrls", max_length=5)
 
 
 class WarrantyEligibilityOut(BaseModel):

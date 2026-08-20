@@ -222,3 +222,16 @@ def test_compare_excludes_unpublished(client, vehicle_factory):
     b = vehicle_factory(is_published=False)
     resp = client.get(f"{LIST_URL}/compare", params={"ids": f"{a.id},{b.id}"})
     assert resp.status_code == 404
+
+
+def test_list_free_text_search_matches_make_model_trim(client, vehicle_factory):
+    vehicle_factory(make="Toyota", model="Corolla", trim="XLE", year=2024)
+    vehicle_factory(make="Toyota", model="Camry", trim="LE", year=2023)
+
+    corolla = client.get(LIST_URL, params={"q": "Corolla 2024"}).json()
+    assert corolla["total"] == 1
+    assert corolla["items"][0]["model"] == "Corolla"
+
+    camry = client.get(LIST_URL, params={"q": "Camry"}).json()
+    assert camry["total"] == 1
+    assert camry["items"][0]["model"] == "Camry"

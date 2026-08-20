@@ -1,8 +1,10 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import CustomerUser
+from app.domains.ownership import service as ownership_service
+from app.domains.ownership.schemas import DocumentUploadOut
 from app.domains.warranty import service
 from app.domains.warranty.schemas import (
     ClaimCreateIn,
@@ -39,6 +41,14 @@ def check_eligibility(
 ) -> WarrantyEligibilityOut:
     data = service.check_eligibility(db, current_user.id, ownedVehicleId)
     return WarrantyEligibilityOut(**data)
+
+
+@router.post("/claims/attachments/upload", response_model=DocumentUploadOut)
+def upload_claim_attachment(
+    current_user: CustomerUser,
+    file: UploadFile = File(...),
+) -> DocumentUploadOut:
+    return ownership_service.upload_document(file)
 
 
 @router.post("/claims", response_model=WarrantyClaimListItemOut, status_code=201)

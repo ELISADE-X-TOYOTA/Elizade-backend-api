@@ -3,7 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import DateTime, Enum, ForeignKey, Integer, Numeric, String, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -113,6 +113,7 @@ class TradeInRequest(Base):
     year: Mapped[int] = mapped_column(Integer, nullable=False)
     mileage: Mapped[int] = mapped_column(Integer, nullable=False)
     condition_notes: Mapped[str] = mapped_column(Text, nullable=False)
+    photo_urls: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
     status: Mapped[TradeInStatus] = mapped_column(
         Enum(TradeInStatus, name="trade_in_status"), default=TradeInStatus.submitted, nullable=False
     )
