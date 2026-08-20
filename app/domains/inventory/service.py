@@ -7,6 +7,7 @@ from math import ceil
 from fastapi import HTTPException, UploadFile, status
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import String, cast, or_
 from sqlalchemy.orm import Session, selectinload
 
 from app.domains.branches.models import Branch
@@ -156,6 +157,7 @@ def list_vehicles(
     branch_id: str | None = None,
     make: str | None = None,
     model: str | None = None,
+    q: str | None = None,
     min_price: float | None = None,
     max_price: float | None = None,
     fuel_type: str | None = None,
@@ -189,6 +191,18 @@ def list_vehicles(
         query = query.filter(Vehicle.make.ilike(f"%{make}%"))
     if model:
         query = query.filter(Vehicle.model.ilike(f"%{model}%"))
+    if q:
+        for token in [part.strip() for part in q.split() if part.strip()]:
+            pattern = f"%{token}%"
+            query = query.filter(
+                or_(
+                    Vehicle.make.ilike(pattern),
+                    Vehicle.model.ilike(pattern),
+                    Vehicle.trim.ilike(pattern),
+                    Vehicle.color.ilike(pattern),
+                    cast(Vehicle.year, String).ilike(pattern),
+                )
+            )
     if fuel_type:
         query = query.filter(Vehicle.fuel_type.ilike(f"%{fuel_type}%"))
     if transmission:

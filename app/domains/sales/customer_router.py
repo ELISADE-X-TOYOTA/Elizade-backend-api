@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, File, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -14,6 +14,8 @@ from app.domains.sales.schemas import (
     TradeInCreateIn,
     TradeInOut,
 )
+from app.domains.ownership.schemas import DocumentUploadOut
+from app.domains.ownership import service as ownership_service
 
 router = APIRouter(prefix="/sales", tags=["customer-sales"])
 
@@ -75,6 +77,14 @@ def list_my_trade_ins(
     db: Session = Depends(get_db),
 ) -> list[TradeInOut]:
     return service.list_my_trade_ins(db, current_user.id)
+
+
+@router.post("/trade-ins/photos/upload", response_model=DocumentUploadOut)
+def upload_trade_in_photo(
+    current_user: CustomerUser,
+    file: UploadFile = File(...),
+) -> DocumentUploadOut:
+    return ownership_service.upload_document(file)
 
 
 @router.post("/trade-ins", response_model=TradeInOut, status_code=status.HTTP_201_CREATED)

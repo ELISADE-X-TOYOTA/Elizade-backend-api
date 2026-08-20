@@ -4,6 +4,19 @@ from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
 
+def _ensure_jsonb_column(engine: Engine, table: str, column: str) -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table(table):
+        return
+    columns = {col["name"] for col in inspector.get_columns(table)}
+    if column in columns:
+        return
+    with engine.begin() as conn:
+        conn.execute(
+            text(f"ALTER TABLE {table} ADD COLUMN {column} JSONB NOT NULL DEFAULT '[]'::jsonb")
+        )
+
+
 def run_startup_migrations(engine: Engine) -> None:
     _add_users_other_name(engine)
     _migrate_otp_to_email(engine)

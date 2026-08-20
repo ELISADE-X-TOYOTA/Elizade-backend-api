@@ -134,6 +134,7 @@ class TradeInCreateIn(BaseModel):
     year: int = Field(ge=1980, le=2100)
     mileage: int = Field(ge=0)
     condition_notes: str = Field(alias="conditionNotes", min_length=10, max_length=2000)
+    photo_urls: list[str] = Field(default_factory=list, alias="photoUrls", max_length=5)
 
 
 class TradeInOut(BaseModel):
@@ -143,6 +144,7 @@ class TradeInOut(BaseModel):
     year: int
     mileage: int
     conditionNotes: str
+    photoUrls: list[str] = Field(default_factory=list)
     status: str
     estimatedValue: str | None = None
     createdAt: str
@@ -156,6 +158,7 @@ class TradeInOut(BaseModel):
             year=row.year,
             mileage=row.mileage,
             conditionNotes=row.condition_notes,
+            photoUrls=list(row.photo_urls or []),
             status=row.status.value,
             estimatedValue=str(row.estimated_value) if row.estimated_value is not None else None,
             createdAt=row.created_at.isoformat(),

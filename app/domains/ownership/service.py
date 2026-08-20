@@ -186,6 +186,9 @@ def list_my_vehicles(db: Session, user_id: str) -> list[OwnedVehicleOut]:
 
 
 def upload_document(file: UploadFile) -> DocumentUploadOut:
+    from app.domains.shared.documents import validate_upload_content_type
+
+    validate_upload_content_type(file.content_type)
     content = file.file.read()
     if len(content) > 10 * 1024 * 1024:
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="File too large (max 10MB)")

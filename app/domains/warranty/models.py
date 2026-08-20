@@ -60,6 +60,7 @@ class WarrantyClaim(Base):
     resolution_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     current_mileage: Mapped[int | None] = mapped_column(Integer, nullable=True)
     conditions: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attachment_urls: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
     assigned_to_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=True)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

@@ -22,12 +22,14 @@ def list_vehicles(
     page: int = Query(default=1, ge=1),
     limit: int = Query(default=20, ge=1, le=100),
     sort: str = Query(default="-createdAt"),
+    q: str | None = Query(default=None, min_length=1, max_length=100),
 ) -> VehicleListOut:
     return service.list_vehicles(
         db,
         branch_id=branchId,
         make=make,
         model=model,
+        q=q,
         min_price=minPrice,
         max_price=maxPrice,
         fuel_type=fuelType,
