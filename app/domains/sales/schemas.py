@@ -1,5 +1,7 @@
 from datetime import datetime
 
+from typing import Annotated
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -99,7 +101,7 @@ class ReservationCreateIn(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     vehicle_id: str = Field(alias="vehicleId")
-    deposit_amount: float | None = Field(default=None, alias="depositAmount", ge=0)
+    deposit_amount: Annotated[float | None, Field(alias="depositAmount", ge=0)] = None
 
 
 class ReservationOut(BaseModel):

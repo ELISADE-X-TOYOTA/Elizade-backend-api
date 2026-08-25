@@ -1,5 +1,7 @@
 from datetime import datetime
 
+from typing import Annotated
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.domains.shared.enums import BranchType
@@ -50,7 +52,7 @@ class BranchCreateIn(BaseModel):
     state: str = Field(min_length=2, max_length=100)
     address: str = Field(min_length=5, max_length=500)
     phone: str | None = Field(default=None, max_length=30)
-    openingHours: dict | None = Field(default=None, alias="openingHours")
+    openingHours: Annotated[dict | None, Field(alias="openingHours")] = None
     isActive: bool = Field(default=True, alias="isActive")
 
     @field_validator("name", "city", "state", "address")
@@ -76,8 +78,8 @@ class BranchUpdateIn(BaseModel):
     state: str | None = Field(default=None, min_length=2, max_length=100)
     address: str | None = Field(default=None, min_length=5, max_length=500)
     phone: str | None = Field(default=None, max_length=30)
-    openingHours: dict | None = Field(default=None, alias="openingHours")
-    isActive: bool | None = Field(default=None, alias="isActive")
+    openingHours: Annotated[dict | None, Field(alias="openingHours")] = None
+    isActive: Annotated[bool | None, Field(alias="isActive")] = None
 
     @field_validator("name", "city", "state", "address", mode="before")
     @classmethod

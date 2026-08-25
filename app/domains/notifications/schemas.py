@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -60,7 +62,7 @@ class NotificationRuleUpdateIn(BaseModel):
     name: str | None = Field(default=None, max_length=200)
     channels: list[str] | None = None
     cadence: str | None = Field(default=None, max_length=100)
-    is_active: bool | None = Field(default=None, alias="isActive")
+    is_active: Annotated[bool | None, Field(alias="isActive")] = None
     config: dict | None = None
 
 
@@ -105,7 +107,7 @@ class BroadcastCampaignCreateIn(BaseModel):
     body: str = Field(min_length=1)
     segment_key: str = Field(alias="segmentKey", min_length=1, max_length=100)
     channels: list[str] = Field(min_length=1)
-    scheduled_at: str | None = Field(default=None, alias="scheduledAt")
+    scheduled_at: Annotated[str | None, Field(alias="scheduledAt")] = None
 
 
 class CampaignSendOut(BaseModel):

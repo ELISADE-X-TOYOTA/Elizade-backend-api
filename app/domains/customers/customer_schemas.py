@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -32,4 +34,4 @@ class WatchlistUpdateIn(BaseModel):
 
     trim: str | None = Field(default=None, max_length=100)
     color: str | None = Field(default=None, max_length=100)
-    is_active: bool | None = Field(default=None, alias="isActive")
+    is_active: Annotated[bool | None, Field(alias="isActive")] = None

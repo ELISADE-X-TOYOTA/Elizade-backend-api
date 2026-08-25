@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
@@ -16,7 +18,7 @@ class UserPublic(BaseModel):
     phone: str
     city: str
     state: str
-    avatar: str | None = Field(default=None, alias="avatar")
+    avatar: Annotated[str | None, Field(alias="avatar")] = None
     role: str
     department: str | None = None
     preferences: UserPreferences
@@ -78,19 +80,19 @@ class UserProfileUpdateIn(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    first_name: str | None = Field(default=None, alias="firstName", max_length=100)
-    last_name: str | None = Field(default=None, alias="lastName", max_length=100)
+    first_name: Annotated[str | None, Field(alias="firstName", max_length=100)] = None
+    last_name: Annotated[str | None, Field(alias="lastName", max_length=100)] = None
     email: EmailStr | None = None
     city: str | None = Field(default=None, max_length=100)
     state: str | None = Field(default=None, max_length=100)
     department: str | None = Field(default=None, max_length=100)
-    avatar: str | None = Field(default=None, alias="avatar", max_length=512)
+    avatar: Annotated[str | None, Field(alias="avatar", max_length=512)] = None
 
 
 class UserPreferencesUpdateIn(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    push_enabled: bool | None = Field(default=None, alias="pushEnabled")
-    sms_enabled: bool | None = Field(default=None, alias="smsEnabled")
-    email_enabled: bool | None = Field(default=None, alias="emailEnabled")
-    marketing_opt_in: bool | None = Field(default=None, alias="marketingOptIn")
+    push_enabled: Annotated[bool | None, Field(alias="pushEnabled")] = None
+    sms_enabled: Annotated[bool | None, Field(alias="smsEnabled")] = None
+    email_enabled: Annotated[bool | None, Field(alias="emailEnabled")] = None
+    marketing_opt_in: Annotated[bool | None, Field(alias="marketingOptIn")] = None

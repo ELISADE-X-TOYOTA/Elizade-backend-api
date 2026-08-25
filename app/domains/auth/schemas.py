@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.domains.users.schemas import UserProfileOut
@@ -8,9 +10,14 @@ class OtpRequestIn(BaseModel):
 
     email: EmailStr
     purpose: str = Field(pattern="^(login|register)$")
-    first_name: str | None = Field(default=None, alias="firstName", max_length=100)
-    last_name: str | None = Field(default=None, alias="lastName", max_length=100)
-    other_name: str | None = Field(default=None, alias="otherName", max_length=100)
+    # `Annotated[...]` rather than `str | None = Field(alias=...)`: newer
+    # pydantic attaches the Field to a single union member and silently drops
+    # the alias, so `firstName` from the client stops binding and registration
+    # fails with "first and last name are required". Annotated attaches it to
+    # the FIELD, which is unambiguous.
+    first_name: Annotated[str | None, Field(alias="firstName", max_length=100)] = None
+    last_name: Annotated[str | None, Field(alias="lastName", max_length=100)] = None
+    other_name: Annotated[str | None, Field(alias="otherName", max_length=100)] = None
 
 
 class OtpRequestOut(BaseModel):

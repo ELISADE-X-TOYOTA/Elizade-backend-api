@@ -26,6 +26,14 @@ class Settings(BaseSettings):
     # quietly fills the live database with fake Toyotas.
     seed_demo_data: bool = False
 
+    # Postmark HTTP API. Preferred over SMTP: PaaS hosts commonly block
+    # outbound 587, which shows up as a ~90s hang rather than a clean error.
+    # Falls back to the SMTP password — Postmark uses one Server API Token for
+    # both, so no extra value needs configuring.
+    postmark_token: str = ""
+    postmark_message_stream: str = "outbound"
+    use_postmark_api: bool = True
+
     # DigitalOcean Spaces. Unset -> uploads stay on local disk.
     spaces_key: str = ""
     spaces_secret: str = ""
@@ -54,6 +62,11 @@ class Settings(BaseSettings):
     @property
     def smtp_configured(self) -> bool:
         return bool(self.smtp_host and self.smtp_username and self.smtp_password)
+
+    @property
+    def postmark_api_enabled(self) -> bool:
+        token = self.postmark_token or self.smtp_password
+        return bool(self.use_postmark_api and token and "postmark" in self.smtp_host.lower())
 
     @property
     def spaces_configured(self) -> bool:

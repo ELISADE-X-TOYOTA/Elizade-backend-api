@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -27,8 +29,8 @@ class OwnershipRequestCreateIn(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     vin: str = Field(min_length=11, max_length=17)
-    registration_number: str | None = Field(default=None, alias="registrationNumber", max_length=50)
-    customer_notes: str | None = Field(default=None, alias="customerNotes", max_length=2000)
+    registration_number: Annotated[str | None, Field(alias="registrationNumber", max_length=50)] = None
+    customer_notes: Annotated[str | None, Field(alias="customerNotes", max_length=2000)] = None
     document_urls: list[str] = Field(default_factory=list, alias="documentUrls")
 
 
@@ -91,8 +93,8 @@ class OwnershipRequestUpdateIn(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     status: str | None = None
-    admin_notes: str | None = Field(default=None, alias="adminNotes")
-    registration_number: str | None = Field(default=None, alias="registrationNumber")
+    admin_notes: Annotated[str | None, Field(alias="adminNotes")] = None
+    registration_number: Annotated[str | None, Field(alias="registrationNumber")] = None
 
 
 class OwnedVehicleOut(BaseModel):

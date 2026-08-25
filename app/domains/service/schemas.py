@@ -1,6 +1,8 @@
 from datetime import datetime
 from decimal import Decimal
 
+from typing import Annotated
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -60,7 +62,7 @@ class ServiceBayUpdateIn(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     name: str | None = Field(default=None, min_length=1, max_length=100)
-    is_active: bool | None = Field(default=None, alias="isActive")
+    is_active: Annotated[bool | None, Field(alias="isActive")] = None
 
 
 # --------------------------------------------------------------------------- #
@@ -160,10 +162,10 @@ class AppointmentUpdateIn(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    scheduled_at: datetime | None = Field(default=None, alias="scheduledAt")
-    bay_id: str | None = Field(default=None, alias="bayId")
-    assigned_technician_id: str | None = Field(default=None, alias="technicianId")
-    estimated_completion: datetime | None = Field(default=None, alias="estimatedCompletion")
+    scheduled_at: Annotated[datetime | None, Field(alias="scheduledAt")] = None
+    bay_id: Annotated[str | None, Field(alias="bayId")] = None
+    assigned_technician_id: Annotated[str | None, Field(alias="technicianId")] = None
+    estimated_completion: Annotated[datetime | None, Field(alias="estimatedCompletion")] = None
 
 
 class AppointmentStatusActionIn(BaseModel):
