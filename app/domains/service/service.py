@@ -267,33 +267,6 @@ def update_appointment(db: Session, appointment_id: str, payload: AppointmentUpd
             appt.job.estimated_completion = data["estimated_completion"]
 
     db.commit()
-
-    # After the commit — the status change stands whether or not the customer
-    # can be reached.
-    if action == "confirm":
-        safe_notify(
-            db,
-            user=appt.customer,
-            event=catalog.SERVICE_APPOINTMENT_CONFIRMED,
-            context={
-                "service_type": appt.service_type.value.replace("_", " ").title(),
-                "vehicle_label": _vehicle_label(appt.owned_vehicle),
-                "when": appt.scheduled_at.strftime("%d %b at %H:%M"),
-                "branch": appt.branch.name if appt.branch else "your branch",
-            },
-        )
-    elif action == "complete":
-        safe_notify(
-            db,
-            user=appt.customer,
-            event=catalog.VEHICLE_READY_FOR_COLLECTION,
-            context={
-                "vehicle_label": _vehicle_label(appt.owned_vehicle),
-                "branch": appt.branch.name if appt.branch else "your branch",
-                "appointment_id": appt.id,
-            },
-        )
-
     return get_appointment(db, appointment_id)
 
 
@@ -342,6 +315,33 @@ def change_appointment_status(
             appt.job.status = ServiceJobStatus.cancelled
 
     db.commit()
+
+    # After the commit — the status change stands whether or not the customer
+    # can be reached.
+    if action == "confirm":
+        safe_notify(
+            db,
+            user=appt.customer,
+            event=catalog.SERVICE_APPOINTMENT_CONFIRMED,
+            context={
+                "service_type": appt.service_type.value.replace("_", " ").title(),
+                "vehicle_label": _vehicle_label(appt.owned_vehicle),
+                "when": appt.scheduled_at.strftime("%d %b at %H:%M"),
+                "branch": appt.branch.name if appt.branch else "your branch",
+            },
+        )
+    elif action == "complete":
+        safe_notify(
+            db,
+            user=appt.customer,
+            event=catalog.VEHICLE_READY_FOR_COLLECTION,
+            context={
+                "vehicle_label": _vehicle_label(appt.owned_vehicle),
+                "branch": appt.branch.name if appt.branch else "your branch",
+                "appointment_id": appt.id,
+            },
+        )
+
     return get_appointment(db, appointment_id)
 
 

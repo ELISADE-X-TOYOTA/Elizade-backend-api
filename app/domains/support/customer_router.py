@@ -3,8 +3,6 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import CustomerUser
-from app.domains.ownership import service as ownership_service
-from app.domains.ownership.schemas import DocumentUploadOut
 from app.domains.support import service
 from app.domains.support.customer_schemas import (
     AttachmentUploadOut,
@@ -17,14 +15,6 @@ from app.domains.support.customer_schemas import (
 )
 
 router = APIRouter(prefix="/support", tags=["customer-support"])
-
-
-@router.post("/attachments/upload", response_model=DocumentUploadOut)
-def upload_attachment(
-    current_user: CustomerUser,
-    file: UploadFile = File(...),
-) -> DocumentUploadOut:
-    return ownership_service.upload_document(file)
 
 
 @router.get("/tickets", response_model=list[CustomerTicketListOut])

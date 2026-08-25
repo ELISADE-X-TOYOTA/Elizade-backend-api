@@ -10,6 +10,8 @@ fallback behaves identically wherever it is used.
 import uuid
 from pathlib import Path
 
+from app.domains.shared.documents import UnsupportedUploadExtension, upload_extension
+
 
 class LocalStorage:
     def __init__(self, base_dir: str, base_url: str) -> None:
@@ -18,9 +20,12 @@ class LocalStorage:
 
     def save(self, *, content: bytes, filename: str | None, content_type: str | None) -> str:
         self.base_dir.mkdir(parents=True, exist_ok=True)
-        ext = "bin"
-        if filename and "." in filename:
-            ext = filename.rsplit(".", 1)[1].lower()
+        try:
+            ext = upload_extension(filename, content_type)
+        except UnsupportedUploadExtension as exc:
+            from app.domains.ownership.storage import UnsupportedFileType
+
+            raise UnsupportedFileType(str(exc)) from exc
         key = f"{uuid.uuid4().hex}.{ext}"
         (self.base_dir / key).write_bytes(content)
         return f"{self.base_url}/{key}"
