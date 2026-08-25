@@ -65,7 +65,7 @@ def test_admin_approve_creates_owned_vehicle(
     assert owned.inventory_vehicle_id == vehicle.id
 
 
-def test_warranty_customer_submit(client, customer_headers, owned_vehicle_factory):
+def test_warranty_customer_submit(client, customer_headers, owned_vehicle_factory, db_session):
     from datetime import datetime, timezone
 
     owned = owned_vehicle_factory(
@@ -91,3 +91,42 @@ def test_warranty_customer_submit(client, customer_headers, owned_vehicle_factor
     )
     assert claim.status_code == 201
     assert claim.json()["status"] == "submitted"
+
+    db_session.refresh(owned)
+    assert owned.mileage == 5200
+
+
+def test_admin_approve_with_custom_in_service_date(
+    client, staff_headers, customer_headers, db_session, vehicle_factory, customer_user
+):
+    from datetime import datetime, timezone
+
+    from app.domains.customers.models import OwnedVehicle
+    from app.domains.warranty.models import WarrantyCertificate
+
+    vehicle = vehicle_factory(vin="JTDBT923000888888", availability=AvailabilityStatus.sold)
+    delivery = datetime(2024, 3, 15, 10, 0, tzinfo=timezone.utc)
+
+    submit = client.post(
+        "/api/v1/ownership/requests",
+        headers=customer_headers,
+        json={"vin": "JTDBT923000888888", "registrationNumber": "LAG-888"},
+    )
+    request_id = submit.json()["id"]
+
+    approved = client.patch(
+        f"/api/v1/admin/ownership/requests/{request_id}",
+        headers=staff_headers,
+        json={"status": "approved", "inServiceDate": delivery.isoformat()},
+    )
+    assert approved.status_code == 200
+
+    owned = db_session.query(OwnedVehicle).filter(OwnedVehicle.vin == "JTDBT923000888888").one()
+    assert owned.purchase_date.replace(tzinfo=timezone.utc) == delivery
+
+    cert = (
+        db_session.query(WarrantyCertificate)
+        .filter(WarrantyCertificate.owned_vehicle_id == owned.id)
+        .one()
+    )
+    assert cert.coverage_start.replace(tzinfo=timezone.utc) == delivery

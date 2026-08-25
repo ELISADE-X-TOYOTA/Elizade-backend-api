@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -95,6 +96,7 @@ class OwnershipRequestUpdateIn(BaseModel):
     status: str | None = None
     admin_notes: Annotated[str | None, Field(alias="adminNotes")] = None
     registration_number: Annotated[str | None, Field(alias="registrationNumber")] = None
+    in_service_date: Annotated[datetime | None, Field(alias="inServiceDate")] = None
 
 
 class OwnedVehicleOut(BaseModel):

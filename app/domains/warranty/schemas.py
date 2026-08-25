@@ -79,6 +79,12 @@ class WarrantyEligibilityOut(BaseModel):
     warrantyMonths: int
     currentMileage: int
     certificateNumber: str | None = None
+    batteryFreeMonths: int
+    batteryPartialMonths: int
+    batteryFreeCoverageEnd: str | None = None
+    batteryPartialCoverageEnd: str | None = None
+    batteryStatus: str
+    batteryEligible: bool
 
 
 class CustomerRecallOut(BaseModel):

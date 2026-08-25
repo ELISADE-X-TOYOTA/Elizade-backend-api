@@ -17,6 +17,7 @@ from app.domains.warranty.policy import (
     BASIC_WARRANTY_KM,
     BASIC_WARRANTY_MONTHS,
     add_months,
+    battery_warranty_status,
     is_within_basic_warranty,
     warranty_end_from_in_service,
 )
@@ -114,3 +115,31 @@ def test_a_naive_in_service_date_is_treated_as_utc():
         in_service_date=datetime(2025, 1, 1), current_mileage=1_000, as_of=d(2025, 6, 1)
     )
     assert eligible is True
+
+
+# ── Battery warranty ─────────────────────────────────────────────────────
+
+
+def test_battery_free_cover_within_24_months():
+    start = d(2024, 1, 1)
+    status, eligible, free_end, partial_end = battery_warranty_status(
+        in_service_date=start, as_of=d(2025, 6, 1)
+    )
+    assert status == "free"
+    assert eligible is True
+    assert free_end == d(2026, 1, 1)
+    assert partial_end == d(2027, 1, 1)
+
+
+def test_battery_partial_cover_between_24_and_36_months():
+    start = d(2023, 1, 1)
+    status, eligible, _, _ = battery_warranty_status(in_service_date=start, as_of=d(2025, 6, 1))
+    assert status == "partial"
+    assert eligible is True
+
+
+def test_battery_expired_after_36_months():
+    start = d(2020, 1, 1)
+    status, eligible, _, _ = battery_warranty_status(in_service_date=start, as_of=d(2024, 6, 1))
+    assert status == "expired"
+    assert eligible is False

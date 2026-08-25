@@ -248,8 +248,11 @@ def _create_owned_vehicle(
     vin: str,
     registration_number: str,
     inventory: Vehicle | None,
+    purchase_date: datetime | None = None,
 ) -> OwnedVehicle:
-    now = datetime.now(timezone.utc)
+    in_service = purchase_date or datetime.now(timezone.utc)
+    if in_service.tzinfo is None:
+        in_service = in_service.replace(tzinfo=timezone.utc)
     has_primary = (
         db.query(OwnedVehicle.id).filter(OwnedVehicle.user_id == user_id, OwnedVehicle.is_primary.is_(True)).first()
         is not None
@@ -271,7 +274,7 @@ def _create_owned_vehicle(
             color_hex=inventory.color_hex,
             mileage=inventory.mileage or 0,
             registration_number=registration_number,
-            purchase_date=now,
+            purchase_date=in_service,
             image_url=primary_img.url if primary_img else None,
             is_primary=not has_primary,
         )
@@ -284,10 +287,10 @@ def _create_owned_vehicle(
             vin=vin,
             model="Toyota",
             trim="—",
-            year=now.year,
+            year=in_service.year,
             color="—",
             registration_number=registration_number,
-            purchase_date=now,
+            purchase_date=in_service,
             is_primary=not has_primary,
         )
 
@@ -342,12 +345,22 @@ def update_request_admin(
             if inventory is None:
                 inventory = _find_inventory_by_vin(db, row.vin)
 
+            in_service = payload.in_service_date or datetime.now(timezone.utc)
+            if in_service.tzinfo is None:
+                in_service = in_service.replace(tzinfo=timezone.utc)
+            if in_service > datetime.now(timezone.utc):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="In-service date cannot be in the future",
+                )
+
             owned = _create_owned_vehicle(
                 db,
                 user_id=row.user_id,
                 vin=row.vin,
                 registration_number=reg,
                 inventory=inventory,
+                purchase_date=in_service,
             )
             row.owned_vehicle_id = owned.id
             row.inventory_vehicle_id = inventory.id if inventory else row.inventory_vehicle_id
