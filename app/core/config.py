@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     admin_email: str = "divinewilson766@gmail.com"
     otp_expire_minutes: int = 10
     otp_length: int = 6
-    cors_origins: str = "http://localhost:5173"
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,https://elizade-web.vercel.app"
 
     smtp_host: str = ""
     smtp_port: int = 587
@@ -57,7 +57,13 @@ class Settings(BaseSettings):
 
     @property
     def cors_origin_list(self) -> list[str]:
-        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+        origins = [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+        # Always allow the production admin portal, even if CORS_ORIGINS on the
+        # host was set before this URL existed.
+        for required in ("https://elizade-web.vercel.app",):
+            if required not in origins:
+                origins.append(required)
+        return origins
 
     @property
     def smtp_configured(self) -> bool:
