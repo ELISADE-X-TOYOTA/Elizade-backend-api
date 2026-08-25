@@ -186,17 +186,11 @@ def list_my_vehicles(db: Session, user_id: str) -> list[OwnedVehicleOut]:
 
 
 def upload_document(file: UploadFile) -> DocumentUploadOut:
-    from app.domains.shared.documents import validate_upload_content_type
+    """Ownership proof lives under `customer/ownership/` in the bucket."""
+    from app.services import uploads  # noqa: PLC0415 — avoids an import cycle
+    from app.services.uploads import save_upload  # noqa: PLC0415
 
-    validate_upload_content_type(file.content_type)
-    content = file.file.read()
-    if len(content) > 10 * 1024 * 1024:
-        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="File too large (max 10MB)")
-    try:
-        url = storage.save(content=content, filename=file.filename, content_type=file.content_type)
-    except UnsupportedFileType as exc:
-        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=str(exc)) from exc
-    return DocumentUploadOut(url=url)
+    return DocumentUploadOut(url=save_upload(file, uploads.ownership_storage))
 
 
 def list_requests_admin(

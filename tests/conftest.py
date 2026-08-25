@@ -44,25 +44,47 @@ def _test_database_url() -> str:
 TEST_DATABASE_URL = _test_database_url()
 
 
+#: Databases to try connecting to in order to issue CREATE DATABASE.
+#: Vanilla Postgres ships `postgres`; DigitalOcean managed Postgres does not —
+#: it ships `defaultdb`. Trying both keeps the suite working against either.
+_MAINTENANCE_DBS = ("postgres", "defaultdb")
+
+
 def _ensure_test_database_exists() -> None:
-    """Create the test database if it is missing (connects to the `postgres` db)."""
+    """Create the test database if it is missing."""
     url = make_url(TEST_DATABASE_URL)
-    admin_dsn = dict(
-        host=url.host or "localhost",
-        port=url.port or 5432,
-        user=url.username,
-        password=url.password,
-        dbname="postgres",
-    )
-    conn = psycopg2.connect(**admin_dsn)
-    try:
-        conn.autocommit = True
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (url.database,))
-            if cur.fetchone() is None:
-                cur.execute(f'CREATE DATABASE "{url.database}"')
-    finally:
-        conn.close()
+
+    last_error: Exception | None = None
+    for maintenance in _MAINTENANCE_DBS:
+        try:
+            conn = psycopg2.connect(
+                host=url.host or "localhost",
+                port=url.port or 5432,
+                user=url.username,
+                password=url.password,
+                dbname=maintenance,
+                connect_timeout=15,
+                sslmode=url.query.get("sslmode", "prefer"),
+            )
+        except psycopg2.OperationalError as exc:
+            last_error = exc
+            continue
+
+        try:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (url.database,))
+                if cur.fetchone() is None:
+                    cur.execute(f'CREATE DATABASE "{url.database}"')
+            return
+        finally:
+            conn.close()
+
+    raise RuntimeError(
+        f"Could not reach a maintenance database ({', '.join(_MAINTENANCE_DBS)}) on "
+        f"{url.host}:{url.port} to create {url.database!r}. Set TEST_DATABASE_URL to "
+        f"point at a database you can already connect to."
+    ) from last_error
 
 
 @pytest.fixture(scope="session")

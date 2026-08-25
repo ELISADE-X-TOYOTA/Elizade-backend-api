@@ -74,4 +74,10 @@ class LocalStorage:
             target.unlink()
 
 
-storage: StorageBackend = LocalStorage()
+# Ownership proof is customer-supplied. The other customer upload paths get
+# their own folders below.
+from app.services.spaces import CUSTOMER_OWNERSHIP, build_storage  # noqa: E402
+
+storage: StorageBackend = build_storage(
+    CUSTOMER_OWNERSHIP, local_dir="uploads/documents", local_url="/media/documents"
+)

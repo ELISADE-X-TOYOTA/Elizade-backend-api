@@ -2,6 +2,8 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException, status
 from sqlalchemy import func
+import logging
+
 from sqlalchemy.orm import Session
 
 from app.domains.customers.models import OwnedVehicle
@@ -23,6 +25,8 @@ from app.domains.notifications.schemas import (
 )
 from app.domains.shared.enums import BroadcastCampaignStatus, NotificationCategory
 from app.domains.users.models import DEFAULT_PREFERENCES, User, UserRole
+
+logger = logging.getLogger("elizade.notifications")
 
 
 def _validate_channels(channels: list[str]) -> list[str]:
@@ -336,3 +340,33 @@ def unread_count(db: Session, user_id: str) -> int:
         .scalar()
         or 0
     )
+
+
+def evaluate_due_rules(db: Session) -> dict:
+    """Run every active rule once. Intended for a scheduled caller.
+
+    There is no in-process scheduler on purpose: a dealership's reminder volume
+    does not justify a broker and worker fleet, and a cron hitting one endpoint
+    is a thing an ops person can see, run by hand and reason about. Point a
+    daily job at `POST /admin/notifications/rules/run-due`.
+
+    Failures are per-rule: one bad rule must not stop the rest of the sweep.
+    """
+    rules = db.query(NotificationRule).filter(NotificationRule.is_active.is_(True)).all()
+    evaluated = 0
+    notifications = 0
+    errors: list[str] = []
+
+    for rule in rules:
+        try:
+            result = evaluate_rule(db, rule.id)
+            evaluated += 1
+            notifications += getattr(result, "notificationsCreated", 0) or 0
+        except HTTPException as exc:
+            # An unsupported trigger_key is a configuration problem, not an outage.
+            errors.append(f"{rule.name}: {exc.detail}")
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("rule %s failed", rule.id)
+            errors.append(f"{rule.name}: {exc}")
+
+    return {"rulesEvaluated": evaluated, "notificationsCreated": notifications, "errors": errors}

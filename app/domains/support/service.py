@@ -20,7 +20,10 @@ from app.domains.support.schemas import (
     TicketMessageOut,
     TicketUpdateIn,
 )
-from app.domains.ownership.storage import UnsupportedFileType, storage
+from app.services import uploads
+from app.services.uploads import save_upload
+from app.domains.notifications import catalog
+from app.domains.notifications.notify import safe_notify
 from app.domains.support.customer_schemas import (
     AttachmentUploadOut,
     CustomerTicketCreateIn,
@@ -282,6 +285,21 @@ def add_staff_message(db: Session, ticket_id: str, *, staff_user: User, body: st
         ticket.status = TicketStatus.in_progress
 
     db.commit()
+
+    # After the commit: a notification is a side effect of a reply that has
+    # already landed, and must not be able to roll it back.
+    safe_notify(
+        db,
+        user=ticket.customer,
+        event=catalog.TICKET_STAFF_REPLIED,
+        context={
+            "reference": ticket.ticket_number,
+            "agent_name": f"{staff_user.first_name} {staff_user.last_name}".strip() or "Elizade Support",
+            "subject": ticket.subject,
+            "ticket_id": ticket.id,
+        },
+    )
+
     detail = get_ticket(db, ticket_id)
     latest = detail.messages[-1] if detail.messages else TicketMessageOut(
         id=message.id,
@@ -300,6 +318,17 @@ def resolve_ticket(db: Session, ticket_id: str) -> SupportTicketDetailOut:
     ticket.status = TicketStatus.resolved
     ticket.resolved_at = datetime.now(timezone.utc)
     db.commit()
+
+    safe_notify(
+        db,
+        user=ticket.customer,
+        event=catalog.TICKET_RESOLVED,
+        context={
+            "reference": ticket.ticket_number,
+            "subject": ticket.subject,
+            "ticket_id": ticket.id,
+        },
+    )
     return get_ticket(db, ticket_id)
 
 
@@ -361,6 +390,18 @@ def create_customer_ticket(db: Session, user: User, payload: CustomerTicketCreat
         )
     )
     db.commit()
+
+    safe_notify(
+        db,
+        user=user,
+        event=catalog.TICKET_OPENED,
+        context={
+            "reference": ticket.ticket_number,
+            "subject": ticket.subject,
+            "sla_hours": response_hours,
+            "ticket_id": ticket.id,
+        },
+    )
     return CustomerTicketDetailOut.from_model(_get_customer_ticket(db, user.id, ticket.id))
 
 
@@ -391,26 +432,8 @@ _MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 
 
 def upload_attachment(file: UploadFile) -> AttachmentUploadOut:
-    """Store one reply attachment and hand back its URL.
-
-    Reuses the shared document storage (`/media/documents`) rather than
-    standing up a second bucket and static mount — it already enforces the
-    image/PDF allowlist, which is what keeps an uploaded `.html` from being
-    served back as script from our own origin.
-    """
-    content = file.file.read()
-    if len(content) > _MAX_ATTACHMENT_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="File too large (max 10MB)",
-        )
-    if not content:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file")
-    try:
-        url = storage.save(content=content, filename=file.filename, content_type=file.content_type)
-    except UnsupportedFileType as exc:
-        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=str(exc)) from exc
-    return AttachmentUploadOut(url=url)
+    """Ticket attachments live under `customer/support/` in the bucket."""
+    return AttachmentUploadOut(url=save_upload(file, uploads.support_storage))
 
 
 def _validate_attachments(urls: list[str]) -> list[str]:

@@ -20,6 +20,28 @@ class Settings(BaseSettings):
     smtp_from_email: str = "noreply@meristemng.com"
     smtp_use_tls: bool = True
 
+    # Populate the database with demo content (30 vehicles, sample customers,
+    # tickets, appointments) on boot. OFF by default: seeding is a development
+    # convenience, and defaulting it on means the first production deploy
+    # quietly fills the live database with fake Toyotas.
+    seed_demo_data: bool = False
+
+    # DigitalOcean Spaces. Unset -> uploads stay on local disk.
+    spaces_key: str = ""
+    spaces_secret: str = ""
+    spaces_bucket: str = ""
+    spaces_region: str = "lon1"
+    spaces_endpoint: str = "https://lon1.digitaloceanspaces.com"
+
+    # Expo push. Unset -> notifications print to the console.
+    push_enabled: bool = False
+    expo_access_token: str = ""
+
+    # SMS gateway (Termii). Unset -> messages print to the console.
+    sms_api_key: str = ""
+    sms_sender_id: str = "Elizade"
+    sms_base_url: str = "https://api.ng.termii.com"
+
     # Shown in transactional email (footer / support links).
     support_email: str = "support@elizade.com"
     support_phone: str = "+234 700 354 9233"
@@ -32,6 +54,14 @@ class Settings(BaseSettings):
     @property
     def smtp_configured(self) -> bool:
         return bool(self.smtp_host and self.smtp_username and self.smtp_password)
+
+    @property
+    def spaces_configured(self) -> bool:
+        return bool(self.spaces_key and self.spaces_secret and self.spaces_bucket)
+
+    @property
+    def sms_configured(self) -> bool:
+        return bool(self.sms_api_key and self.sms_sender_id)
 
 
 @lru_cache

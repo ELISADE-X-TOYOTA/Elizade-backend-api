@@ -21,6 +21,24 @@ def run_startup_migrations(engine: Engine) -> None:
     _add_users_other_name(engine)
     _migrate_otp_to_email(engine)
     _add_ticket_message_attachments(engine)
+    _create_notification_tables(engine)
+
+
+def _create_notification_tables(engine: Engine) -> None:
+    """Delivery log, device tokens and per-category preferences.
+
+    `Base.metadata.create_all` already creates these on a fresh database; this
+    exists so an EXISTING dev database picks them up without a manual step.
+    Idempotent — `create_all` skips tables that are already there.
+    """
+    from app.domains.notifications.models import (  # noqa: PLC0415 — avoid an import cycle at module load
+        DeviceToken,
+        NotificationDelivery,
+        NotificationPreference,
+    )
+
+    for model in (NotificationDelivery, DeviceToken, NotificationPreference):
+        model.__table__.create(bind=engine, checkfirst=True)
 
 
 def _add_ticket_message_attachments(engine: Engine) -> None:

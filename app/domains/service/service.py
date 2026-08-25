@@ -18,6 +18,8 @@ from app.domains.service.models import (
     ServiceJob,
     ServiceJobStage,
 )
+from app.domains.notifications import catalog
+from app.domains.notifications.notify import safe_notify
 from app.domains.service.schemas import (
     AdditionalWorkCreateIn,
     AdditionalWorkStatusUpdateIn,
@@ -163,6 +165,13 @@ _APPOINTMENT_LOADS = (
 )
 
 
+def _vehicle_label(vehicle) -> str:
+    """How a customer refers to their own car: "2022 Toyota Hilux"."""
+    if vehicle is None:
+        return "your vehicle"
+    return " ".join(str(p) for p in (vehicle.year, vehicle.make, vehicle.model) if p)
+
+
 def _get_appointment(db: Session, appointment_id: str) -> ServiceAppointment:
     appt = (
         db.query(ServiceAppointment)
@@ -258,6 +267,33 @@ def update_appointment(db: Session, appointment_id: str, payload: AppointmentUpd
             appt.job.estimated_completion = data["estimated_completion"]
 
     db.commit()
+
+    # After the commit — the status change stands whether or not the customer
+    # can be reached.
+    if action == "confirm":
+        safe_notify(
+            db,
+            user=appt.customer,
+            event=catalog.SERVICE_APPOINTMENT_CONFIRMED,
+            context={
+                "service_type": appt.service_type.value.replace("_", " ").title(),
+                "vehicle_label": _vehicle_label(appt.owned_vehicle),
+                "when": appt.scheduled_at.strftime("%d %b at %H:%M"),
+                "branch": appt.branch.name if appt.branch else "your branch",
+            },
+        )
+    elif action == "complete":
+        safe_notify(
+            db,
+            user=appt.customer,
+            event=catalog.VEHICLE_READY_FOR_COLLECTION,
+            context={
+                "vehicle_label": _vehicle_label(appt.owned_vehicle),
+                "branch": appt.branch.name if appt.branch else "your branch",
+                "appointment_id": appt.id,
+            },
+        )
+
     return get_appointment(db, appointment_id)
 
 
@@ -429,6 +465,20 @@ def add_additional_work(db: Session, job_id: str, payload: AdditionalWorkCreateI
         job.appointment.status = AppointmentStatus.awaiting_approval
 
     db.commit()
+
+    appt = job.appointment
+    if appt is not None:
+        safe_notify(
+            db,
+            user=appt.customer,
+            event=catalog.EXTRA_WORK_NEEDS_APPROVAL,
+            context={
+                "vehicle_label": _vehicle_label(appt.owned_vehicle),
+                "description": payload.description,
+                "amount": f"NGN {payload.cost:,.0f}",
+                "appointment_id": appt.id,
+            },
+        )
     return get_job(db, job_id)
 
 

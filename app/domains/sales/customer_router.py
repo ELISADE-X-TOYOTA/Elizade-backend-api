@@ -16,6 +16,8 @@ from app.domains.sales.schemas import (
 )
 from app.domains.ownership.schemas import DocumentUploadOut
 from app.domains.ownership import service as ownership_service
+from app.services import uploads
+from app.services.uploads import save_upload
 
 router = APIRouter(prefix="/sales", tags=["customer-sales"])
 
@@ -84,7 +86,8 @@ def upload_trade_in_photo(
     current_user: CustomerUser,
     file: UploadFile = File(...),
 ) -> DocumentUploadOut:
-    return ownership_service.upload_document(file)
+    # Trade-in photos get their own folder — see services/uploads.py.
+    return DocumentUploadOut(url=save_upload(file, uploads.trade_in_storage))
 
 
 @router.post("/trade-ins", response_model=TradeInOut, status_code=status.HTTP_201_CREATED)
