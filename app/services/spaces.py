@@ -90,11 +90,14 @@ class SpacesStorage:
         return f"https://{self.bucket}.{self.region}.digitaloceanspaces.com/{key}"
 
     def save(self, *, content: bytes, filename: str | None, content_type: str | None) -> str:
-        # The extension is decided by the caller's own allowlist before we get
-        # here; this only carries it through to the key.
-        ext = "bin"
-        if filename and "." in filename:
-            ext = filename.rsplit(".", 1)[1].lower()
+        from app.domains.shared.documents import UnsupportedUploadExtension, upload_extension
+
+        try:
+            ext = upload_extension(filename, content_type)
+        except UnsupportedUploadExtension as exc:
+            from app.domains.ownership.storage import UnsupportedFileType
+
+            raise UnsupportedFileType(str(exc)) from exc
 
         key = f"{self.folder}/{uuid.uuid4().hex}.{ext}"
         self.client.put_object(

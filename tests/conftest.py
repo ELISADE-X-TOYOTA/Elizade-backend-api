@@ -8,6 +8,22 @@ rolled back on teardown, so tests are isolated and the data never persists.
 """
 
 import os
+
+# The suite must never hit real Postmark or Spaces even when `.env` configures them.
+# Set these before any `app.*` import — email and upload backends are built at
+# module load and would otherwise talk to production integrations.
+os.environ["USE_POSTMARK_API"] = "false"
+for _integration_key in (
+    "SMTP_HOST",
+    "SMTP_USERNAME",
+    "SMTP_PASSWORD",
+    "POSTMARK_TOKEN",
+    "SPACES_KEY",
+    "SPACES_SECRET",
+    "SPACES_BUCKET",
+):
+    os.environ[_integration_key] = ""
+
 from datetime import datetime, timezone
 from decimal import Decimal
 
