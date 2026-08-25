@@ -18,6 +18,12 @@ BATTERY_FREE_MONTHS = 24
 BATTERY_PARTIAL_MONTHS = 36
 
 
+def _as_utc(moment: datetime) -> datetime:
+    if moment.tzinfo is None:
+        return moment.replace(tzinfo=timezone.utc)
+    return moment
+
+
 def add_months(moment: datetime, months: int) -> datetime:
     """Advance by CALENDAR months, clamping to the end of a short month.
 
@@ -53,8 +59,7 @@ def is_within_basic_warranty(
         return False, "In-service date is not recorded for this vehicle"
 
     now = as_of or datetime.now(timezone.utc)
-    if in_service_date.tzinfo is None:
-        in_service_date = in_service_date.replace(tzinfo=timezone.utc)
+    in_service_date = _as_utc(in_service_date)
 
     end = warranty_end_from_in_service(in_service_date)
     if now > end:
@@ -64,3 +69,36 @@ def is_within_basic_warranty(
         return False, f"Mileage exceeds warranty limit ({BASIC_WARRANTY_KM:,} km)"
 
     return True, None
+
+
+def battery_free_end_from_in_service(in_service: datetime) -> datetime:
+    return add_months(_as_utc(in_service), BATTERY_FREE_MONTHS)
+
+
+def battery_partial_end_from_in_service(in_service: datetime) -> datetime:
+    return add_months(_as_utc(in_service), BATTERY_PARTIAL_MONTHS)
+
+
+def battery_warranty_status(
+    *,
+    in_service_date: datetime | None,
+    as_of: datetime | None = None,
+) -> tuple[str, bool, datetime | None, datetime | None]:
+    """Return (status, eligible, free_end, partial_end).
+
+    status is one of: unknown, free, partial, expired
+    eligible is True during free or partial cover (within 36 months).
+    """
+    if in_service_date is None:
+        return "unknown", False, None, None
+
+    now = as_of or datetime.now(timezone.utc)
+    in_service = _as_utc(in_service_date)
+    free_end = battery_free_end_from_in_service(in_service)
+    partial_end = battery_partial_end_from_in_service(in_service)
+
+    if now > partial_end:
+        return "expired", False, free_end, partial_end
+    if now > free_end:
+        return "partial", True, free_end, partial_end
+    return "free", True, free_end, partial_end
