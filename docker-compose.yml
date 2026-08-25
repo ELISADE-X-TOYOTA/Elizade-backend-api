@@ -27,7 +27,7 @@ services:
       ADMIN_EMAIL: divinewilson766@gmail.com
       OTP_EXPIRE_MINUTES: "10"
       OTP_LENGTH: "6"
-      CORS_ORIGINS: "http://localhost:5173,http://127.0.0.1:5173"
+      CORS_ORIGINS: "http://localhost:5173,http://127.0.0.1:5173,https://elizade-web.vercel.app"
     depends_on:
       db:
         condition: service_healthy
