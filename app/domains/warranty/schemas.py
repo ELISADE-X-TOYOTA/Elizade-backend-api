@@ -67,7 +67,7 @@ class ClaimCreateIn(BaseModel):
     description: str = Field(min_length=10)
     conditions: str | None = Field(default=None, max_length=2000)
     current_mileage: Annotated[int | None, Field(alias="currentMileage", ge=0)] = None
-    attachment_urls: list[str] = Field(default_factory=list, alias="attachmentUrls", max_length=5)
+    attachment_urls: Annotated[list[str], Field(alias="attachmentUrls", max_length=5)] = Field(default_factory=list)
 
 
 class WarrantyEligibilityOut(BaseModel):
@@ -165,7 +165,7 @@ class CertificateCreateIn(BaseModel):
     type: str = Field(default="standard")
     coverage_start: Annotated[str | None, Field(alias="coverageStart")] = None
     coverage_end: Annotated[str | None, Field(alias="coverageEnd")] = None
-    coverage_details: list[str] = Field(default_factory=list, alias="coverageDetails")
+    coverage_details: Annotated[list[str], Field(alias="coverageDetails")] = Field(default_factory=list)
 
 
 class RecallCampaignOut(BaseModel):
@@ -203,7 +203,7 @@ class RecallCreateIn(BaseModel):
     title: str = Field(min_length=3, max_length=300)
     description: str = Field(min_length=3)
     severity: str = Field(default="medium")
-    affected_models: list[str] = Field(default_factory=list, alias="affectedModels")
+    affected_models: Annotated[list[str], Field(alias="affectedModels")] = Field(default_factory=list)
     affected_year_from: Annotated[int | None, Field(alias="affectedYearFrom")] = None
     affected_year_to: Annotated[int | None, Field(alias="affectedYearTo")] = None
 
