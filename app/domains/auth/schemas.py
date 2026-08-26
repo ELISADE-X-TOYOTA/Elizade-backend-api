@@ -32,6 +32,9 @@ class OtpVerifyIn(BaseModel):
 
 class AuthTokenOut(BaseModel):
     access_token: str
+    #: Present on sign-in and refresh. Clients store it and exchange it for a
+    #: new pair when the access token stops being accepted.
+    refresh_token: str | None = None
     token_type: str = "bearer"
     user: UserProfileOut
 
@@ -42,3 +45,15 @@ class EmailAvailabilityOut(BaseModel):
     email: EmailStr
     available: bool
     reason: str | None = None
+
+
+class RefreshIn(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    refresh_token: Annotated[str, Field(alias="refreshToken", min_length=16)]
+
+
+class RefreshOut(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"

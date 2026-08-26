@@ -1,3 +1,4 @@
+import logging
 import math
 import re
 import uuid
@@ -8,6 +9,8 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.domains.customers.models import OwnedVehicle
 from app.domains.inventory.models import Vehicle
+from app.domains.notifications import catalog
+from app.domains.notifications.notify import safe_notify
 from app.domains.ownership.models import VehicleOwnershipRequest
 from app.domains.ownership.schemas import (
     DocumentUploadOut,
@@ -31,6 +34,8 @@ ACTIVE_REQUEST_STATUSES = (
     OwnershipRequestStatus.pending_documents,
     OwnershipRequestStatus.under_review,
 )
+logger = logging.getLogger("elizade.ownership")
+
 VIN_PATTERN = re.compile(r"^[A-HJ-NPR-Z0-9]{11,17}$")
 
 
@@ -366,14 +371,101 @@ def update_request_admin(
             row.inventory_vehicle_id = inventory.id if inventory else row.inventory_vehicle_id
             warranty_service.issue_standard_certificate(db, owned, issued_by_id=reviewer_id)
 
+        previous_status = row.status
         row.status = new_status
         row.reviewed_by_id = reviewer_id
         row.reviewed_at = datetime.now(timezone.utc)
 
     db.commit()
     db.refresh(row)
+
+    # Tell the customer what just happened to their claim.
+    #
+    # None of these fired before: the catalogue defined the approved and
+    # rejected events but nothing ever called them, so a claim could be
+    # approved, declined, or held pending documents and the customer was
+    # never told anything. They found out by opening the app and checking.
+    #
+    # AFTER the commit, deliberately. `safe_notify` swallows its own errors,
+    # but the decision itself must be durable before we announce it — an
+    # alert about an approval that then failed to save is worse than a late
+    # alert.
+    if payload.status is not None and new_status != previous_status:
+        # Guarded here, not just inside. `safe_notify` protects the delivery
+        # itself, but `_notify_status_change` also reads the vehicle to build
+        # a label — a query that runs BEFORE any safe_notify call and could
+        # throw on its own. Whatever happens while announcing the decision,
+        # the decision is already committed and the reviewer's request must
+        # still return 200.
+        try:
+            _notify_status_change(db, row, previous_status)
+        except Exception:  # noqa: BLE001
+            logger.exception("ownership status notification failed for request %s", row.id)
+
     inv = db.get(Vehicle, row.inventory_vehicle_id) if row.inventory_vehicle_id else None
     return OwnershipRequestListItemOut.from_model(row, preview=_vehicle_preview(inv))
+
+
+#: Shown when an admin moves a claim to `pending_documents` without saying
+#: what is actually missing. Vague, but it still tells the customer the ball
+#: is in their court — which is the part that matters.
+DEFAULT_DOCUMENT_REQUEST = "additional proof of ownership documents"
+
+
+def _notify_status_change(
+    db: Session,
+    row: VehicleOwnershipRequest,
+    previous_status: OwnershipRequestStatus,
+) -> None:
+    """Send the customer-facing alert for an ownership decision."""
+    customer = row.customer
+    if customer is None:
+        return
+
+    vehicle_label = _ownership_vehicle_label(db, row)
+
+    if row.status == OwnershipRequestStatus.pending_documents:
+        safe_notify(
+            db,
+            user=customer,
+            event=catalog.OWNERSHIP_DOCUMENTS_REQUESTED,
+            context={
+                "vin": row.vin,
+                # `admin_notes` is where the reviewer writes what is missing.
+                # It is free text and optional, so it is never trusted to be
+                # present — a notification saying nothing useful still beats
+                # silence, which is what happened before.
+                "details": (row.admin_notes or "").strip() or DEFAULT_DOCUMENT_REQUEST,
+            },
+        )
+    elif row.status == OwnershipRequestStatus.approved:
+        safe_notify(
+            db,
+            user=customer,
+            event=catalog.OWNERSHIP_CLAIM_APPROVED,
+            context={"vehicle_label": vehicle_label},
+        )
+    elif row.status == OwnershipRequestStatus.rejected:
+        safe_notify(
+            db,
+            user=customer,
+            event=catalog.OWNERSHIP_CLAIM_REJECTED,
+            context={
+                "vin": row.vin,
+                "reason": (row.admin_notes or "").strip() or "please contact us for details",
+            },
+        )
+
+
+def _ownership_vehicle_label(db: Session, row: VehicleOwnershipRequest) -> str:
+    """Best available human name for the vehicle, falling back to the VIN."""
+    inv = db.get(Vehicle, row.inventory_vehicle_id) if row.inventory_vehicle_id else None
+    if inv is not None:
+        parts = [str(getattr(inv, "year", "") or ""), inv.make or "", inv.model or ""]
+        label = " ".join(p for p in parts if p).strip()
+        if label:
+            return label
+    return f"vehicle with chassis {row.vin}"
 
 
 def append_documents(db: Session, user_id: str, request_id: str, urls: list[str]) -> OwnershipRequestOut:

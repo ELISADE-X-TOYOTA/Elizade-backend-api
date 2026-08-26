@@ -22,6 +22,32 @@ def run_startup_migrations(engine: Engine) -> None:
     _migrate_otp_to_email(engine)
     _add_ticket_message_attachments(engine)
     _create_notification_tables(engine)
+    _add_lead_customer_tracking(engine)
+    _create_refresh_tokens(engine)
+
+
+def _add_lead_customer_tracking(engine: Engine) -> None:
+    """Customer-visible lead notes, plus the status-event history table.
+
+    `is_customer_visible` is backfilled to FALSE, which is the point: every
+    note that already exists was written as internal staff commentary, and
+    switching customer lead tracking on must not publish it retroactively.
+    """
+    from app.domains.leads.models import LeadStatusEvent  # noqa: PLC0415 — avoids an import cycle
+
+    LeadStatusEvent.__table__.create(bind=engine, checkfirst=True)
+
+    inspector = inspect(engine)
+    if not inspector.has_table("lead_notes"):
+        return
+    columns = {col["name"] for col in inspector.get_columns("lead_notes")}
+    if "is_customer_visible" in columns:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE lead_notes ADD COLUMN is_customer_visible BOOLEAN"))
+        conn.execute(text("UPDATE lead_notes SET is_customer_visible = false WHERE is_customer_visible IS NULL"))
+        conn.execute(text("ALTER TABLE lead_notes ALTER COLUMN is_customer_visible SET DEFAULT false"))
+        conn.execute(text("ALTER TABLE lead_notes ALTER COLUMN is_customer_visible SET NOT NULL"))
 
 
 def _create_notification_tables(engine: Engine) -> None:
@@ -95,3 +121,35 @@ def _migrate_otp_to_email(engine: Engine) -> None:
         conn.execute(text("UPDATE otp_challenges SET email = 'legacy@elizade.local' WHERE email IS NULL"))
         conn.execute(text("ALTER TABLE otp_challenges ALTER COLUMN email SET NOT NULL"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_otp_challenges_email ON otp_challenges (email)"))
+
+
+def _create_refresh_tokens(engine: Engine) -> None:
+    """Session refresh tokens.
+
+    Created here rather than relying on create_all so an already-deployed
+    database picks it up on the next boot without a manual step.
+    """
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS refresh_tokens (
+                    id UUID PRIMARY KEY,
+                    user_id UUID NOT NULL REFERENCES users(id),
+                    token_hash VARCHAR(64) NOT NULL UNIQUE,
+                    family_id UUID NOT NULL,
+                    expires_at TIMESTAMPTZ NOT NULL,
+                    revoked_at TIMESTAMPTZ,
+                    replaced_by_id UUID,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+        )
+        # Lookup is by hash on every refresh; family lookup only on revocation.
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_refresh_tokens_user_id ON refresh_tokens(user_id)")
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_refresh_tokens_family_id ON refresh_tokens(family_id)")
+        )

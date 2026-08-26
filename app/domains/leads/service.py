@@ -18,7 +18,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from app.domains.leads.models import Lead, LeadNote
+from app.domains.leads.models import Lead, LeadNote, LeadStatusEvent
 from app.domains.leads.schemas import (
     AgentBrief,
     CustomerBrief,
@@ -444,6 +444,26 @@ def update_lead(db: Session, lead_id: str, payload: LeadUpdateIn) -> LeadDetailO
     return _lead_to_detail(_get_lead_or_404(db, lead_id))
 
 
+def _record_status_event(
+    db: Session, lead: Lead, new_status: LeadStatus, actor: User | None
+) -> None:
+    """Append one row to the lead's transition history.
+
+    The customer-facing tracker shows when each stage was reached, which the
+    schema could not answer before: `lead.status` is overwritten in place, so
+    the previous stage and its timestamp were simply lost. Recorded here at
+    every write site rather than in an ORM event hook, so a transition is
+    only logged where it is genuinely a transition.
+    """
+    db.add(
+        LeadStatusEvent(
+            lead_id=lead.id,
+            status=new_status,
+            actor_id=actor.id if actor else None,
+        )
+    )
+
+
 def update_lead_status(
     db: Session, lead_id: str, payload: LeadStatusUpdateIn, current_user: User
 ) -> LeadDetailOut:
@@ -480,6 +500,7 @@ def update_lead_status(
         )
 
     lead.status = new_status
+    _record_status_event(db, lead, new_status, current_user)
 
     # Auto-append a transition note if caller supplied one
     if payload.notes and payload.notes.strip():
@@ -530,6 +551,7 @@ def mark_won(db: Session, lead_id: str, payload: LeadWonIn, current_user: User) 
 
     lead.status = LeadStatus.won
     lead.won_at = datetime.now(timezone.utc)
+    _record_status_event(db, lead, LeadStatus.won, current_user)
     lead.vehicle_id = vehicle_id
 
     if payload.notes and payload.notes.strip():
@@ -568,6 +590,7 @@ def mark_lost(db: Session, lead_id: str, payload: LeadLostIn, current_user: User
 
     lead.status = LeadStatus.lost
     lead.lost_at = datetime.now(timezone.utc)
+    _record_status_event(db, lead, LeadStatus.lost, current_user)
     lead.lost_reason = payload.lostReason.strip()
 
     if payload.notes and payload.notes.strip():

@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     jwt_secret: str = "dev-secret"
     jwt_expire_minutes: int = 10080  # 7 days
     admin_email: str = "divinewilson766@gmail.com"
+    #: Refresh tokens outlive access tokens by design: the access token is
+    #: the thing sent on every request, the refresh token only on renewal.
+    refresh_token_expire_days: int = 60
     otp_expire_minutes: int = 10
     otp_length: int = 6
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,https://elizade-web.vercel.app"

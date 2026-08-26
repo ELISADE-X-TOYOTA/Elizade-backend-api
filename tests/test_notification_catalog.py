@@ -81,6 +81,7 @@ FULL_CONTEXT = {
     "severity": "critical",
     "recall_title": "Airbag inflator",
     "vin": "JTDB1234567890001",
+    "details": "a clearer photo of the vehicle licence",
     "reference": "SUP-1042",
     "subject": "Warning light on dashboard",
     "sla_hours": 4,

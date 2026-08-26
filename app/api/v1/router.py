@@ -10,6 +10,7 @@ from app.domains.dashboard.customer_router import router as dashboard_customer_r
 from app.domains.dashboard.router import router as dashboard_router
 from app.domains.inventory.admin_router import router as inventory_admin_router
 from app.domains.inventory.router import router as inventory_router
+from app.domains.leads.customer_router import router as leads_customer_router
 from app.domains.leads.router import router as leads_router
 from app.domains.notifications.admin_router import router as notifications_admin_router
 from app.domains.notifications.router import router as notifications_router
@@ -48,5 +49,6 @@ api_router.include_router(warranty_customer_router)
 api_router.include_router(warranty_router)
 api_router.include_router(analytics_router)
 api_router.include_router(service_router)
+api_router.include_router(leads_customer_router)
 api_router.include_router(sales_customer_router)
 api_router.include_router(service_customer_router)

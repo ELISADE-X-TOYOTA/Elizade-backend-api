@@ -116,3 +116,33 @@ class OtpChallenge(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     user: Mapped[User | None] = relationship(back_populates="otp_challenges")
+
+
+class RefreshToken(Base):
+    """A long-lived credential that mints short-lived access tokens.
+
+    STORED HASHED, never in plaintext. The database is the one place an
+    attacker with a backup can read at leisure, and a refresh token is a
+    standing grant — leaking one is worse than leaking an access token, which
+    at least expires on its own.
+
+    ROTATION: every successful refresh revokes the presented token and issues a
+    replacement, linked through `replaced_by_id`. That chain is what makes
+    theft detectable: a stolen token can be used at most once before the real
+    client's next refresh presents an already-revoked token.
+    """
+
+    __tablename__ = "refresh_tokens"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=False, index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    #: All tokens rotated from one sign-in share a family id, so detecting
+    #: reuse lets us revoke the whole lineage rather than one link of it.
+    family_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    replaced_by_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    user: Mapped[User] = relationship()

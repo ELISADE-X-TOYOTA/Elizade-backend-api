@@ -222,6 +222,22 @@ RECALL_AFFECTS_VEHICLE = _spec(
 
 # ── Ownership ────────────────────────────────────────────────────────────
 
+OWNERSHIP_DOCUMENTS_REQUESTED = _spec(
+    key="ownership.documents_requested",
+    category=NotificationCategory.system,
+    #: PUSH as well as IN_APP, and deliberately so: this is the one ownership
+    #: event where the claim STOPS until the customer does something. Approval
+    #: and rejection are outcomes they can read whenever; this is a request,
+    #: and a request nobody sees is a claim that sits in limbo.
+    channels=(IN_APP, PUSH, EMAIL),
+    title="More documents needed for your vehicle claim",
+    body="To verify your claim for chassis {vin} we need: {details}",
+    #: Straight to the claim, which is where the upload control lives — not to
+    #: the garage list, where the customer would have to find it again.
+    deep_link="/garage",
+    requires=("vin", "details"),
+)
+
 OWNERSHIP_CLAIM_APPROVED = _spec(
     key="ownership.claim_approved",
     category=NotificationCategory.system,
@@ -292,6 +308,7 @@ ALL_EVENTS: tuple[EventSpec, ...] = (
     WARRANTY_CLAIM_APPROVED,
     WARRANTY_CLAIM_REJECTED,
     RECALL_AFFECTS_VEHICLE,
+    OWNERSHIP_DOCUMENTS_REQUESTED,
     OWNERSHIP_CLAIM_APPROVED,
     OWNERSHIP_CLAIM_REJECTED,
     TICKET_OPENED,
