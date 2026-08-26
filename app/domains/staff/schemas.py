@@ -39,6 +39,7 @@ class StaffOut(BaseModel):
     department: str
     city: str
     state: str
+    role: str
     isActive: bool
     isVerified: bool
     createdAt: str
