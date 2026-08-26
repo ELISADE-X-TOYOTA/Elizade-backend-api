@@ -232,10 +232,12 @@ OWNERSHIP_DOCUMENTS_REQUESTED = _spec(
     channels=(IN_APP, PUSH, EMAIL),
     title="More documents needed for your vehicle claim",
     body="To verify your claim for chassis {vin} we need: {details}",
-    #: Straight to the claim, which is where the upload control lives — not to
-    #: the garage list, where the customer would have to find it again.
-    deep_link="/garage",
-    requires=("vin", "details"),
+    #: Straight to the upload screen for THIS claim. "/garage" only got the
+    #: customer to a list they then had to search — and the whole point of the
+    #: alert is that the claim is blocked until they act, so the tap has to
+    #: land on the control that unblocks it.
+    deep_link="/ownership-documents/{request_id}",
+    requires=("vin", "details", "request_id"),
 )
 
 OWNERSHIP_CLAIM_APPROVED = _spec(

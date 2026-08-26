@@ -1,4 +1,5 @@
 import math
+import logging
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -235,6 +236,11 @@ def update_ticket(db: Session, ticket_id: str, payload: TicketUpdateIn) -> Suppo
     if not ticket:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
 
+    # Captured once, before anything below can change it. Assignment moves the
+    # status too (open -> assigned), so comparing against the value on entry
+    # announces that as well, not only a status the agent set explicitly.
+    previous_status = ticket.status
+
     if payload.status is not None:
         try:
             new_status = TicketStatus(payload.status.strip().lower())
@@ -262,6 +268,11 @@ def update_ticket(db: Session, ticket_id: str, payload: TicketUpdateIn) -> Suppo
                 ticket.status = TicketStatus.assigned
 
     db.commit()
+    db.refresh(ticket)
+
+    if ticket.status != previous_status:
+        _broadcast_status(ticket.id, ticket.status.value, previous_status.value)
+
     return get_ticket(db, ticket_id)
 
 
@@ -285,6 +296,11 @@ def add_staff_message(db: Session, ticket_id: str, *, staff_user: User, body: st
         ticket.status = TicketStatus.in_progress
 
     db.commit()
+    db.refresh(message)
+
+    # Same reasoning as the notification below: after the commit, and unable
+    # to fail the reply it announces.
+    _broadcast_message(message, ticket.id)
 
     # After the commit: a notification is a side effect of a reply that has
     # already landed, and must not be able to roll it back.
@@ -456,6 +472,9 @@ def upload_attachment(file: UploadFile) -> AttachmentUploadOut:
     return AttachmentUploadOut(url=save_upload(file, uploads.support_storage))
 
 
+logger = logging.getLogger("elizade.support")
+
+
 def _validate_attachments(urls: list[str]) -> list[str]:
     """Accept only URLs this API issued, preserving order and dropping repeats.
 
@@ -523,6 +542,13 @@ def add_customer_message(
     # so two messages written in one transaction carry identical timestamps and
     # `messages[-1]` can return the wrong one.
     latest = TicketMessageOut.from_model(message)
+
+    # Also announce it to anyone holding a live socket on this ticket. The
+    # REST and WebSocket paths must produce the SAME event, or an agent with
+    # the console open sees replies only when the customer happens to have
+    # used the socket path — which is invisible until it is reported as
+    # "messages sometimes do not arrive".
+    _broadcast_message(message, ticket.id)
     return CustomerTicketMessageCreateOut(ticket=detail, message=latest)
 
 
@@ -533,3 +559,77 @@ def rate_customer_ticket(db: Session, user_id: str, ticket_id: str, rating: int)
     ticket.satisfaction_rating = rating
     db.commit()
     return CustomerTicketDetailOut.from_model(_get_customer_ticket(db, user_id, ticket_id))
+
+
+def list_customer_messages_since(
+    db: Session,
+    user_id: str,
+    ticket_id: str,
+    since: datetime | None = None,
+) -> list[TicketMessageOut]:
+    """Messages on a ticket, optionally only those after `since`.
+
+    THE RECONNECT PATH. A dropped socket loses every frame sent while it was
+    down, and the client cannot know what it missed — so on reconnect it asks
+    for everything after the last message it holds. That is what makes the
+    realtime layer safe to lose: the socket is an optimisation, and this is the
+    guarantee underneath it.
+
+    STRICTLY GREATER THAN, so the client's own last message is not returned to
+    it again. Postgres `now()` is transaction time, so two messages written in
+    one transaction share a timestamp — a `>=` here would re-deliver on every
+    single reconnect.
+    """
+    ticket = _get_customer_ticket(db, user_id, ticket_id)
+
+    query = db.query(TicketMessage).filter(TicketMessage.ticket_id == ticket.id)
+    if since is not None:
+        if since.tzinfo is None:
+            since = since.replace(tzinfo=timezone.utc)
+        query = query.filter(TicketMessage.created_at > since)
+
+    rows = query.order_by(TicketMessage.created_at.asc()).all()
+    return [TicketMessageOut.from_model(r) for r in rows]
+
+
+# ── Realtime fan-out ─────────────────────────────────────────────────────
+#
+# Imported lazily inside the helpers: `app.realtime` imports this module for
+# `_validate_attachments`, so a module-scope import here is a cycle.
+#
+# None of these can fail the caller. A reply that saved but did not broadcast
+# is a client that refetches a moment later; a broadcast that rolled back a
+# saved reply would be a lost message.
+
+
+def _broadcast_message(message: TicketMessage, ticket_id: str) -> None:
+    try:
+        from app.realtime import events
+        from app.realtime.hub import broadcaster, ticket_room
+
+        broadcaster.publish(
+            ticket_room(ticket_id),
+            events.envelope(events.MESSAGE_RECEIVED, events.message_payload(message, ticket_id)),
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("failed to broadcast message on ticket %s", ticket_id)
+
+
+def _broadcast_status(ticket_id: str, new_status: str, previous_status: str) -> None:
+    try:
+        from app.realtime import events
+        from app.realtime.hub import broadcaster, ticket_room
+
+        broadcaster.publish(
+            ticket_room(ticket_id),
+            events.envelope(
+                events.STATUS_CHANGED,
+                {
+                    "ticketId": ticket_id,
+                    "status": new_status,
+                    "previousStatus": previous_status,
+                },
+            ),
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("failed to broadcast status on ticket %s", ticket_id)

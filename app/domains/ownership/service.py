@@ -430,6 +430,7 @@ def _notify_status_change(
             user=customer,
             event=catalog.OWNERSHIP_DOCUMENTS_REQUESTED,
             context={
+                "request_id": row.id,
                 "vin": row.vin,
                 # `admin_notes` is where the reviewer writes what is missing.
                 # It is free text and optional, so it is never trusted to be
@@ -451,6 +452,7 @@ def _notify_status_change(
             user=customer,
             event=catalog.OWNERSHIP_CLAIM_REJECTED,
             context={
+                "request_id": row.id,
                 "vin": row.vin,
                 "reason": (row.admin_notes or "").strip() or "please contact us for details",
             },

@@ -24,6 +24,7 @@ def run_startup_migrations(engine: Engine) -> None:
     _create_notification_tables(engine)
     _add_lead_customer_tracking(engine)
     _create_refresh_tokens(engine)
+    _add_ticket_message_read_at(engine)
 
 
 def _add_lead_customer_tracking(engine: Engine) -> None:
@@ -153,3 +154,17 @@ def _create_refresh_tokens(engine: Engine) -> None:
         conn.execute(
             text("CREATE INDEX IF NOT EXISTS ix_refresh_tokens_family_id ON refresh_tokens(family_id)")
         )
+
+
+def _add_ticket_message_read_at(engine: Engine) -> None:
+    """Read receipts for ticket messages."""
+    with engine.begin() as conn:
+        exists = conn.execute(
+            text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'ticket_messages' AND column_name = 'read_at'"
+            )
+        ).first()
+        if exists:
+            return
+        conn.execute(text("ALTER TABLE ticket_messages ADD COLUMN read_at TIMESTAMPTZ"))
