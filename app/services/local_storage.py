@@ -18,6 +18,10 @@ class LocalStorage:
         self.base_dir = Path(base_dir)
         self.base_url = base_url.rstrip("/")
 
+    @property
+    def url_prefix(self) -> str:
+        return f"{self.base_url}/"
+
     def save(self, *, content: bytes, filename: str | None, content_type: str | None) -> str:
         self.base_dir.mkdir(parents=True, exist_ok=True)
         try:

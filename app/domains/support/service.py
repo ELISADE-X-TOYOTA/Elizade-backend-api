@@ -421,10 +421,30 @@ def get_customer_ticket(db: Session, user_id: str, ticket_id: str) -> CustomerTi
     return CustomerTicketDetailOut.from_model(_get_customer_ticket(db, user_id, ticket_id))
 
 
-#: Prefix of every URL our own document storage hands out.
-_ATTACHMENT_URL_PREFIX = "/media/documents/"
 #: Storage keys are `<uuid-hex>.<ext>` — nothing else is ours.
 _ATTACHMENT_KEY = re.compile(r"^[0-9a-f]{32}\.[a-z0-9]{1,5}$")
+
+
+def _attachment_url_prefixes() -> tuple[str, ...]:
+    """Prefixes an attachment URL is allowed to start with.
+
+    Read from the STORAGE BACKEND rather than hardcoded, because the two must
+    agree and previously did not: this was pinned to the local-disk path
+    `/media/documents/`, so the moment Spaces was configured every upload
+    succeeded and was then rejected by the same API that had just issued the
+    URL. Deriving it means the check cannot drift from the uploader again.
+
+    Read lazily, not at import: `uploads` builds its storage instances at
+    module load, and importing it from here at module scope is a cycle.
+    """
+    from app.services import uploads  # noqa: PLC0415
+
+    prefixes = [uploads.support_storage.url_prefix]
+    # Tickets opened before the move to Spaces still reference local-disk
+    # URLs. Rejecting those would break replies on historical tickets.
+    if "/media/" not in prefixes[0]:
+        prefixes.append("/media/documents/")
+    return tuple(prefixes)
 
 
 #: Matches the ownership document cap — same store, same limit.
@@ -451,12 +471,13 @@ def _validate_attachments(urls: list[str]) -> list[str]:
         url = (raw or "").strip()
         if not url:
             continue
-        if not url.startswith(_ATTACHMENT_URL_PREFIX):
+        prefix = next((p for p in _attachment_url_prefixes() if url.startswith(p)), None)
+        if prefix is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Attachments must be uploaded via /support/attachments/upload",
             )
-        key = url[len(_ATTACHMENT_URL_PREFIX) :]
+        key = url[len(prefix) :]
         if not _ATTACHMENT_KEY.match(key):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid attachment reference")
         if url not in cleaned:

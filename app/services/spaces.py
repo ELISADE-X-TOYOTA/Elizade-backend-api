@@ -54,6 +54,18 @@ class StorageBackend(Protocol):
 
     def delete(self, url: str) -> None: ...
 
+    @property
+    def url_prefix(self) -> str:
+        """Everything `save` puts before the storage key.
+
+        Callers that must VERIFY a URL came from this API read it here rather
+        than hardcoding a path. Support attachments previously hardcoded
+        `/media/documents/`, which was correct only while storage was local
+        disk — once Spaces was configured, every upload succeeded and was then
+        rejected by the very endpoint that issued it.
+        """
+        ...
+
 
 class SpacesStorage:
     """One instance per folder. `save` returns a public CDN URL."""
@@ -85,6 +97,10 @@ class SpacesStorage:
                 ),
             )
         return self._client
+
+    @property
+    def url_prefix(self) -> str:
+        return f"https://{self.bucket}.{self.region}.digitaloceanspaces.com/{self.folder}/"
 
     def public_url(self, key: str) -> str:
         return f"https://{self.bucket}.{self.region}.digitaloceanspaces.com/{key}"
