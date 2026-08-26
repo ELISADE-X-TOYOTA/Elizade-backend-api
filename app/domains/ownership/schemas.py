@@ -32,7 +32,7 @@ class OwnershipRequestCreateIn(BaseModel):
     vin: str = Field(min_length=11, max_length=17)
     registration_number: Annotated[str | None, Field(alias="registrationNumber", max_length=50)] = None
     customer_notes: Annotated[str | None, Field(alias="customerNotes", max_length=2000)] = None
-    document_urls: list[str] = Field(default_factory=list, alias="documentUrls")
+    document_urls: Annotated[list[str], Field(alias="documentUrls")] = Field(default_factory=list)
 
 
 class OwnershipRequestOut(BaseModel):
@@ -138,4 +138,4 @@ class DocumentUploadOut(BaseModel):
 class DocumentsAppendIn(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    document_urls: list[str] = Field(default_factory=list, alias="documentUrls")
+    document_urls: Annotated[list[str], Field(alias="documentUrls")] = Field(default_factory=list)

@@ -24,6 +24,8 @@ APP_DIR = Path(__file__).resolve().parent.parent / "app"
 
 #: The shape that silently loses its alias.
 VULNERABLE = re.compile(r"^\s+\w+:\s+[^=]+\|\s*None\s*=\s*Field\([^)]*alias=", re.M)
+#: list[T] = Field(..., alias=...) drops the alias the same way on newer pydantic.
+LIST_ALIAS_VULNERABLE = re.compile(r"^\s+\w+:\s+list\[[^\]]+\]\s*=\s*Field\([^)]*alias=", re.M)
 
 
 def test_no_schema_uses_the_fragile_union_alias_form():
@@ -36,10 +38,13 @@ def test_no_schema_uses_the_fragile_union_alias_form():
         for match in VULNERABLE.finditer(text):
             line_no = text[: match.start()].count("\n") + 1
             offenders.append(f"{path.relative_to(APP_DIR.parent)}:{line_no}")
+        for match in LIST_ALIAS_VULNERABLE.finditer(text):
+            line_no = text[: match.start()].count("\n") + 1
+            offenders.append(f"{path.relative_to(APP_DIR.parent)}:{line_no} (list alias)")
 
     assert not offenders, (
-        "These fields put Field(alias=...) on a union type, where newer pydantic "
-        "drops the alias. Use Annotated[T | None, Field(alias=...)] = None:\n  "
+        "These fields put Field(alias=...) on a union or list type, where newer pydantic "
+        "drops the alias. Use Annotated[T, Field(alias=...)] = None (or default_factory for lists):\n  "
         + "\n  ".join(offenders)
     )
 
@@ -91,6 +96,27 @@ def test_building_the_app_emits_no_alias_warnings():
             {"resolutionNotes": "Approved", "assignedToId": "u1"},
             {"resolution_notes": "Approved", "assigned_to_id": "u1"},
             id="claim-patch",
+        ),
+        pytest.param(
+            "app.domains.ownership.schemas:OwnershipRequestCreateIn",
+            {
+                "vin": "JTDBT923405000003",
+                "registrationNumber": "LAG-123",
+                "customerNotes": "Purchased last month",
+                "documentUrls": ["/media/documents/proof.pdf"],
+            },
+            {
+                "registration_number": "LAG-123",
+                "customer_notes": "Purchased last month",
+                "document_urls": ["/media/documents/proof.pdf"],
+            },
+            id="ownership-create",
+        ),
+        pytest.param(
+            "app.domains.ownership.schemas:DocumentsAppendIn",
+            {"documentUrls": ["/media/documents/extra.pdf"]},
+            {"document_urls": ["/media/documents/extra.pdf"]},
+            id="ownership-documents-append",
         ),
     ],
 )
