@@ -31,7 +31,8 @@ def test_admin_endpoint_rejects_customer(client, customer_headers):
     assert resp.status_code == 403
 
 
-def test_admin_endpoint_allows_admin(client, admin_headers):
+def test_admin_endpoint_allows_admin(client, admin_headers, admin_user):
     resp = client.get("/api/v1/admin/staff", headers=admin_headers)
     assert resp.status_code == 200
-    assert resp.json() == []
+    body = resp.json()
+    assert any(m["id"] == admin_user.id and m["role"] == "admin" for m in body)
