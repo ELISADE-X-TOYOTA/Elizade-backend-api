@@ -24,6 +24,11 @@ PNG_BYTES = bytes.fromhex(
     "890000000a49444154789c6300010000050001" "0d0a2db4" "0000000049454e44ae426082"
 )
 
+# Minimal ISO BMFF header accepted as an MP4 container. The media validator
+# checks the container signature; codec-level transcoding is intentionally
+# outside the API's upload path.
+MP4_BYTES = b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2"
+
 
 @pytest.fixture
 def other_customer_headers(db_session) -> dict[str, str]:
@@ -74,6 +79,20 @@ def test_upload_returns_a_media_url(client, customer_headers):
     assert url.endswith(".png")
 
 
+def test_upload_accepts_mp4(client, customer_headers):
+    res = _upload(client, customer_headers, name="walkaround.mp4", data=MP4_BYTES, ctype="video/mp4")
+    assert res.status_code == 200, res.text
+    assert res.json()["url"].endswith(".mp4")
+
+
+def test_document_media_requires_authentication(client, customer_headers):
+    url = _upload(client, customer_headers).json()["url"]
+    assert client.get(url).status_code == 401
+    served = client.get(url, headers=customer_headers)
+    assert served.status_code == 200
+    assert served.headers["content-type"].startswith("image/png")
+
+
 def test_upload_requires_authentication(client):
     assert _upload(client, {}).status_code == 401
 
@@ -99,6 +118,25 @@ def test_upload_rejects_script_capable_types(client, customer_headers, name, cty
     """A stored .html or .svg would be served as script from our own origin."""
     res = _upload(client, customer_headers, name=name, data=b"<script>alert(1)</script>", ctype=ctype)
     assert res.status_code == 415
+
+
+def test_upload_rejects_video_with_non_video_contents(client, customer_headers):
+    res = _upload(client, customer_headers, name="fake.mp4", data=b"not a movie", ctype="video/mp4")
+    assert res.status_code == 415
+
+
+def test_upload_rejects_video_over_duration_limit():
+    from fastapi import HTTPException
+    from app.domains.shared.documents import validate_upload
+
+    movie = bytearray(MP4_BYTES + b"\x00" * 28)
+    movie[24:28] = b"\x00\x00\x00\x1c"
+    movie[28:32] = b"mvhd"
+    movie[44:48] = (1).to_bytes(4, "big")
+    movie[48:52] = (121).to_bytes(4, "big")
+    with pytest.raises(HTTPException) as error:
+        validate_upload(bytes(movie), "long.mp4", "video/mp4")
+    assert error.value.status_code == 413
 
 
 def test_upload_ignores_a_lying_filename(client, customer_headers):

@@ -2,12 +2,14 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from math import ceil
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException, UploadFile, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.domains.branches.models import Branch
 from app.domains.customers.models import OwnedVehicle
+from app.domains.ownership import service as ownership_service
+from app.domains.ownership.schemas import DocumentUploadOut
 from app.domains.service.models import (
     AdditionalWorkRequest,
     ServiceAppointment,
@@ -30,6 +32,7 @@ from app.domains.service.schemas import (
     CustomerAdditionalWorkDecisionIn,
     CustomerAppointmentCreateIn,
     CustomerAppointmentListItemOut,
+    CustomerAppointmentRescheduleIn,
     CustomerServiceTrackOut,
     JobDetailOut,
     PaginatedHistoryOut,
@@ -48,6 +51,7 @@ from app.domains.shared.enums import (
     ServiceJobStatus,
     ServiceType,
 )
+from app.domains.shared.documents import normalize_document_urls
 from app.domains.users.models import User, UserRole
 
 # Default stage checklists seeded onto a job when an appointment is started.
@@ -526,6 +530,38 @@ _CUSTOMER_APPOINTMENT_LOADS = (
     joinedload(ServiceAppointment.job).selectinload(ServiceJob.additional_work),
 )
 
+_CUSTOMER_APPOINTMENT_CHANGEABLE_STATUSES = (
+    AppointmentStatus.requested,
+    AppointmentStatus.confirmed,
+)
+
+
+def _future_datetime(value: datetime) -> datetime:
+    """Return an aware UTC datetime and reject slots that have already passed."""
+    scheduled = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    scheduled = scheduled.astimezone(timezone.utc)
+    if scheduled <= datetime.now(timezone.utc):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Scheduled time must be in the future")
+    return scheduled
+
+
+def _ensure_vehicle_slot_available(
+    db: Session, *, vehicle_id: str, scheduled_at: datetime, exclude_id: str | None = None
+) -> None:
+    """A vehicle cannot have two active appointments in the same time slot."""
+    query = db.query(ServiceAppointment.id).filter(
+        ServiceAppointment.owned_vehicle_id == vehicle_id,
+        ServiceAppointment.scheduled_at == scheduled_at,
+        ServiceAppointment.status != AppointmentStatus.cancelled,
+    )
+    if exclude_id:
+        query = query.filter(ServiceAppointment.id != exclude_id)
+    if query.first() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This vehicle already has an appointment at that time",
+        )
+
 
 def _get_customer_appointment(db: Session, customer_id: str, appointment_id: str) -> ServiceAppointment:
     appt = (
@@ -554,6 +590,7 @@ def list_customer_appointments(db: Session, customer_id: str) -> list[CustomerAp
 def create_customer_appointment(
     db: Session, user: User, payload: CustomerAppointmentCreateIn
 ) -> CustomerAppointmentListItemOut:
+    attachment_urls = normalize_document_urls(payload.attachment_urls)
     vehicle = (
         db.query(OwnedVehicle)
         .filter(OwnedVehicle.id == payload.owned_vehicle_id, OwnedVehicle.user_id == user.id)
@@ -573,11 +610,8 @@ def create_customer_appointment(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid service type") from exc
 
-    scheduled = payload.scheduled_at
-    if scheduled.tzinfo is None:
-        scheduled = scheduled.replace(tzinfo=timezone.utc)
-    if scheduled <= datetime.now(timezone.utc):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Scheduled time must be in the future")
+    scheduled = _future_datetime(payload.scheduled_at)
+    _ensure_vehicle_slot_available(db, vehicle_id=vehicle.id, scheduled_at=scheduled)
 
     appt = ServiceAppointment(
         user_id=user.id,
@@ -587,6 +621,7 @@ def create_customer_appointment(
         scheduled_at=scheduled,
         status=AppointmentStatus.requested,
         issue_description=payload.issue_description.strip(),
+        attachment_urls=attachment_urls,
         mileage_at_booking=payload.mileage_at_booking,
     )
     db.add(appt)
@@ -598,6 +633,54 @@ def create_customer_appointment(
         .one()
     )
     return CustomerAppointmentListItemOut.from_model(loaded)
+
+
+def reschedule_customer_appointment(
+    db: Session, customer_id: str, appointment_id: str, payload: CustomerAppointmentRescheduleIn
+) -> CustomerAppointmentListItemOut:
+    appt = _get_customer_appointment(db, customer_id, appointment_id)
+    if appt.status not in _CUSTOMER_APPOINTMENT_CHANGEABLE_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot reschedule an appointment with status '{appt.status.value}'",
+        )
+
+    scheduled = _future_datetime(payload.scheduled_at)
+    _ensure_vehicle_slot_available(
+        db,
+        vehicle_id=appt.owned_vehicle_id,
+        scheduled_at=scheduled,
+        exclude_id=appt.id,
+    )
+    appt.scheduled_at = scheduled
+    db.commit()
+    return CustomerAppointmentListItemOut.from_model(_get_customer_appointment(db, customer_id, appointment_id))
+
+
+def cancel_customer_appointment(
+    db: Session, customer_id: str, appointment_id: str
+) -> CustomerAppointmentListItemOut:
+    appt = _get_customer_appointment(db, customer_id, appointment_id)
+    if appt.status not in _CUSTOMER_APPOINTMENT_CHANGEABLE_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot cancel an appointment with status '{appt.status.value}'",
+        )
+
+    appt.status = AppointmentStatus.cancelled
+    if appt.job and appt.job.status not in (ServiceJobStatus.completed, ServiceJobStatus.cancelled):
+        appt.job.status = ServiceJobStatus.cancelled
+    db.commit()
+    return CustomerAppointmentListItemOut.from_model(_get_customer_appointment(db, customer_id, appointment_id))
+
+
+def upload_customer_appointment_attachment(file: UploadFile) -> DocumentUploadOut:
+    """Upload appointment evidence through the shared document storage backend."""
+    content = file.file.read()
+    if not content:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file")
+    file.file.seek(0)
+    return ownership_service.upload_document(file)
 
 
 def list_customer_history(

@@ -41,6 +41,8 @@ OPEN_STATUSES = (
     TicketStatus.waiting_customer,
 )
 
+_ATTACHMENT_KEY = re.compile(r"^[0-9a-f]{32}\.(jpg|png|webp|pdf|mp4|mov)$")
+
 
 def get_summary(db: Session) -> SupportSummaryOut:
     now = datetime.now(timezone.utc)
@@ -276,7 +278,14 @@ def update_ticket(db: Session, ticket_id: str, payload: TicketUpdateIn) -> Suppo
     return get_ticket(db, ticket_id)
 
 
-def add_staff_message(db: Session, ticket_id: str, *, staff_user: User, body: str) -> TicketMessageCreateOut:
+def add_staff_message(
+    db: Session,
+    ticket_id: str,
+    *,
+    staff_user: User,
+    body: str,
+    attachments: list[str] | None = None,
+) -> TicketMessageCreateOut:
     ticket = db.get(SupportTicket, ticket_id)
     if not ticket:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
@@ -287,6 +296,7 @@ def add_staff_message(db: Session, ticket_id: str, *, staff_user: User, body: st
         sender_type=MessageSender.staff,
         sender_id=staff_user.id,
         body=body.strip(),
+        attachments=_validate_attachments(attachments or []),
     )
     db.add(message)
 
@@ -481,9 +491,9 @@ def _validate_attachments(urls: list[str]) -> list[str]:
     SECURITY: without this the field is an arbitrary-URL sink. A customer could
     reply with `https://attacker.example/pixel.png`, and the staff console would
     dutifully render it — leaking agent IPs and read receipts, or serving
-    something worse. Requiring our own storage prefix AND the uuid key shape
-    means a stored attachment can only ever be a file that came through
-    `POST /support/attachments/upload`, which is itself content-type checked.
+    something worse. Requiring our own storage prefix and a safe single
+    storage key means attachment references cannot escape the authenticated
+    media endpoint.
     """
     cleaned: list[str] = []
     for raw in urls:
@@ -499,8 +509,6 @@ def _validate_attachments(urls: list[str]) -> list[str]:
         key = url[len(prefix) :]
         if not _ATTACHMENT_KEY.match(key):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid attachment reference")
-        if url not in cleaned:
-            cleaned.append(url)
     return cleaned
 
 

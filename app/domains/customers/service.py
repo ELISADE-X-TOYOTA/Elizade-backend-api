@@ -21,7 +21,18 @@ from app.domains.customers.schemas import (
     CustomerSegmentsOut,
 )
 from app.domains.customers.models import CustomerNote, OwnedVehicle
+from app.domains.customers.models import CustomerDuplicateReview, WatchlistItem
+from app.domains.audit.models import AuditLog
+from app.domains.inventory.models import VehicleAvailabilitySubscription
+from app.domains.leads.models import Lead
+from app.domains.notifications.models import UserNotification
+from app.domains.ownership.models import VehicleOwnershipRequest
+from app.domains.sales.models import Quotation, Reservation, TestDriveBooking, TradeInRequest
+from app.domains.service.models import ServiceAppointment, ServiceHistoryItem
+from app.domains.shared.enums import AuditAction, DuplicateReviewStatus
+from app.domains.support.models import SupportTicket
 from app.domains.users.models import User, UserRole
+from app.domains.warranty.models import RecallVehicle, WarrantyCertificate, WarrantyClaim
 
 
 def list_customers(
@@ -586,3 +597,281 @@ def get_customer_segments_count(db: Session) -> CustomerSegmentsOut:
         premium=result.premium or 0,
         atRisk=result.at_risk or 0,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Duplicate detection and merge                                               #
+# --------------------------------------------------------------------------- #
+
+def _contact_from_user(user: User) -> CustomerContact:
+    return CustomerContact(
+        id=user.id,
+        firstName=user.first_name,
+        lastName=user.last_name,
+        email=user.email,
+        phone=user.phone_display,
+        city=user.city,
+        state=user.state,
+        avatar=user.avatar_url,
+        isActive=user.is_active,
+        isVerified=user.is_verified,
+        createdAt=user.created_at,
+        updatedAt=user.updated_at,
+    )
+
+
+def _duplicate_review_to_out(review: CustomerDuplicateReview) -> dict:
+    return {
+        "id": review.id,
+        "customerId": review.customer_id,
+        "duplicateCustomerId": review.duplicate_customer_id,
+        "customer": _contact_from_user(review.customer),
+        "duplicateCustomer": _contact_from_user(review.duplicate_customer),
+        "matchFields": list(review.match_fields or []),
+        "confidence": review.confidence,
+        "status": review.status.value,
+        "reviewedById": review.reviewed_by_id,
+        "reviewedAt": review.reviewed_at,
+        "mergedIntoId": review.merged_into_id,
+        "createdAt": review.created_at,
+    }
+
+
+def _duplicate_match(left: User, right: User) -> tuple[list[str], int]:
+    fields: list[str] = []
+    if left.email and right.email and left.email.strip().lower() == right.email.strip().lower():
+        fields.append("email")
+    if left.phone_normalized and left.phone_normalized == right.phone_normalized:
+        fields.append("phone")
+    same_name = (
+        left.first_name.strip().casefold() == right.first_name.strip().casefold()
+        and left.last_name.strip().casefold() == right.last_name.strip().casefold()
+    )
+    if same_name:
+        fields.append("name")
+        if left.city.strip().casefold() == right.city.strip().casefold() and left.state.strip().casefold() == right.state.strip().casefold():
+            fields.append("location")
+
+    confidence = 0
+    if "email" in fields or "phone" in fields:
+        confidence = 100
+    elif "name" in fields and "location" in fields:
+        confidence = 85
+    elif "name" in fields:
+        confidence = 70
+    return fields, confidence
+
+
+def detect_duplicate_customers(
+    db: Session,
+    *,
+    review_status: str | None = None,
+) -> list:
+    """Find likely duplicate customer pairs and persist them for review."""
+    customers = (
+        db.query(User)
+        .filter(User.role == UserRole.customer)
+        .order_by(User.id.asc())
+        .all()
+    )
+    found: list[CustomerDuplicateReview] = []
+    for index, left in enumerate(customers):
+        for right in customers[index + 1:]:
+            match_fields, confidence = _duplicate_match(left, right)
+            if not match_fields:
+                continue
+            review = (
+                db.query(CustomerDuplicateReview)
+                .filter(
+                    CustomerDuplicateReview.customer_id == left.id,
+                    CustomerDuplicateReview.duplicate_customer_id == right.id,
+                )
+                .one_or_none()
+            )
+            if review is None:
+                review = CustomerDuplicateReview(
+                    customer_id=left.id,
+                    duplicate_customer_id=right.id,
+                    match_fields=match_fields,
+                    confidence=confidence,
+                    status=DuplicateReviewStatus.pending,
+                )
+                db.add(review)
+            elif review.status == DuplicateReviewStatus.pending:
+                review.match_fields = match_fields
+                review.confidence = confidence
+            found.append(review)
+
+    db.commit()
+    if review_status:
+        try:
+            wanted_status = DuplicateReviewStatus(review_status.strip().lower())
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid duplicate review status") from exc
+        found = [review for review in found if review.status == wanted_status]
+    return [_duplicate_review_to_out(review) for review in found]
+
+
+def list_duplicate_customers(db: Session, *, review_status: str | None = None) -> list:
+    # Detection is deliberately run on every list request so new duplicates
+    # are reviewable without a separate background worker.
+    return detect_duplicate_customers(db, review_status=review_status)
+
+
+def review_duplicate_customer(
+    db: Session,
+    review_id: str,
+    *,
+    status_value: str,
+    reviewer_id: str,
+) -> dict:
+    review = db.get(CustomerDuplicateReview, review_id)
+    if not review:
+        raise HTTPException(status_code=404, detail="Duplicate review not found")
+    try:
+        next_status = DuplicateReviewStatus(status_value.strip().lower())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid duplicate review status") from exc
+    if next_status == DuplicateReviewStatus.merged:
+        raise HTTPException(status_code=400, detail="Use the merge endpoint to mark a duplicate as merged")
+
+    review.status = next_status
+    review.reviewed_by_id = reviewer_id
+    review.reviewed_at = datetime.now(timezone.utc)
+    audit = AuditLog(
+        actor_id=reviewer_id,
+        action=AuditAction.review,
+        entity_type="customer_duplicate_review",
+        entity_id=review.id,
+        changes={"status": next_status.value, "customerId": review.customer_id, "duplicateCustomerId": review.duplicate_customer_id},
+    )
+    db.add(audit)
+    db.commit()
+    db.refresh(review)
+    return _duplicate_review_to_out(review)
+
+
+def merge_customers(
+    db: Session,
+    *,
+    source_customer_id: str,
+    target_customer_id: str,
+    actor_id: str,
+) -> dict:
+    """Move all customer-owned records to target in one transaction."""
+    if source_customer_id == target_customer_id:
+        raise HTTPException(status_code=400, detail="Source and target customers must be different")
+
+    source = db.get(User, source_customer_id)
+    target = db.get(User, target_customer_id)
+    if not source or source.role != UserRole.customer or not target or target.role != UserRole.customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+
+    reassigned: dict[str, int] = {}
+
+    def move(model, column, key: str) -> None:
+        count = (
+            db.query(model)
+            .filter(column == source.id)
+            .update({column: target.id}, synchronize_session=False)
+        )
+        reassigned[key] = count
+
+    try:
+        move(OwnedVehicle, OwnedVehicle.user_id, "ownedVehicles")
+        move(CustomerNote, CustomerNote.customer_id, "crmNotes")
+        move(WatchlistItem, WatchlistItem.user_id, "watchlistItems")
+        move(Lead, Lead.customer_id, "leads")
+        move(TestDriveBooking, TestDriveBooking.user_id, "testDrives")
+        move(Quotation, Quotation.user_id, "quotations")
+        move(Reservation, Reservation.user_id, "reservations")
+        move(TradeInRequest, TradeInRequest.user_id, "tradeIns")
+        move(ServiceAppointment, ServiceAppointment.user_id, "serviceAppointments")
+        move(ServiceHistoryItem, ServiceHistoryItem.user_id, "serviceHistory")
+        move(WarrantyCertificate, WarrantyCertificate.user_id, "warrantyCertificates")
+        move(WarrantyClaim, WarrantyClaim.user_id, "warrantyClaims")
+        move(RecallVehicle, RecallVehicle.user_id, "recallVehicles")
+        move(SupportTicket, SupportTicket.user_id, "supportTickets")
+        move(UserNotification, UserNotification.user_id, "notifications")
+        move(VehicleOwnershipRequest, VehicleOwnershipRequest.user_id, "ownershipRequests")
+
+        # The pair is unique per user and vehicle, so coalesce duplicate
+        # Notify Me subscriptions instead of violating the unique constraint.
+        source_subscriptions = (
+            db.query(VehicleAvailabilitySubscription)
+            .filter(VehicleAvailabilitySubscription.user_id == source.id)
+            .all()
+        )
+        moved_subscriptions = 0
+        for subscription in source_subscriptions:
+            existing = (
+                db.query(VehicleAvailabilitySubscription)
+                .filter(
+                    VehicleAvailabilitySubscription.user_id == target.id,
+                    VehicleAvailabilitySubscription.vehicle_id == subscription.vehicle_id,
+                )
+                .one_or_none()
+            )
+            if existing:
+                if subscription.is_active and not existing.is_active:
+                    existing.is_active = True
+                    existing.notified_at = None
+                db.delete(subscription)
+            else:
+                subscription.user_id = target.id
+                moved_subscriptions += 1
+        reassigned["availabilitySubscriptions"] = moved_subscriptions
+
+        source.is_active = False
+        source.preferences = {**(source.preferences or {}), "merged_into": target.id}
+
+        audit = AuditLog(
+            actor_id=actor_id,
+            action=AuditAction.merge,
+            entity_type="customer",
+            entity_id=target.id,
+            changes={
+                "sourceCustomerId": source.id,
+                "targetCustomerId": target.id,
+                "reassigned": reassigned,
+            },
+        )
+        db.add(audit)
+
+        db.query(CustomerDuplicateReview).filter(
+            CustomerDuplicateReview.customer_id == source.id,
+            CustomerDuplicateReview.duplicate_customer_id == target.id,
+        ).update(
+            {
+                CustomerDuplicateReview.status: DuplicateReviewStatus.merged,
+                CustomerDuplicateReview.reviewed_by_id: actor_id,
+                CustomerDuplicateReview.reviewed_at: datetime.now(timezone.utc),
+                CustomerDuplicateReview.merged_into_id: target.id,
+            },
+            synchronize_session=False,
+        )
+        db.query(CustomerDuplicateReview).filter(
+            CustomerDuplicateReview.customer_id == target.id,
+            CustomerDuplicateReview.duplicate_customer_id == source.id,
+        ).update(
+            {
+                CustomerDuplicateReview.status: DuplicateReviewStatus.merged,
+                CustomerDuplicateReview.reviewed_by_id: actor_id,
+                CustomerDuplicateReview.reviewed_at: datetime.now(timezone.utc),
+                CustomerDuplicateReview.merged_into_id: target.id,
+            },
+            synchronize_session=False,
+        )
+        db.flush()
+        audit_id = audit.id
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return {
+        "survivingCustomerId": target.id,
+        "mergedCustomerId": source.id,
+        "reassigned": reassigned,
+        "auditId": audit_id,
+    }

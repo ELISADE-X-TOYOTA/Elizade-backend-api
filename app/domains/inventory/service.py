@@ -11,7 +11,8 @@ from sqlalchemy import String, cast, or_
 from sqlalchemy.orm import Session, selectinload
 
 from app.domains.branches.models import Branch
-from app.domains.inventory.models import Vehicle, VehicleImage
+from app.domains.inventory.models import Vehicle, VehicleAvailabilitySubscription, VehicleImage
+from app.domains.notifications.dispatcher import dispatch_to_user
 from app.domains.inventory.schemas import (
     BulkImportResultOut,
     BulkImportRowErrorOut,
@@ -27,7 +28,7 @@ from app.domains.inventory.schemas import (
     VehicleUpdateIn,
 )
 from app.domains.inventory.storage import storage
-from app.domains.shared.enums import AvailabilityStatus
+from app.domains.shared.enums import AvailabilityStatus, NotificationCategory
 from app.domains.users.models import User
 
 # Statuses a public visitor is allowed to see / filter by.
@@ -44,6 +45,18 @@ SORT_OPTIONS = {
 }
 COMPARE_LIMIT = 2
 MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB per image
+
+
+def _normalize_publish_at(value: datetime | None) -> datetime | None:
+    """Normalize schedule instants to UTC and reject ambiguous local times."""
+    if value is None:
+        return None
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="publishedAt must include a timezone offset",
+        )
+    return value.astimezone(timezone.utc)
 
 
 def _iso(dt: datetime | None) -> str | None:
@@ -145,9 +158,13 @@ def _to_detail(vehicle: Vehicle) -> VehicleDetailOut:
 
 def _public_base_query(db: Session):
     """Vehicles visible to the public: not soft-deleted and published."""
+    now = datetime.now(timezone.utc)
     return db.query(Vehicle).filter(
         Vehicle.deleted_at.is_(None),
         Vehicle.is_published.is_(True),
+        # NULL is the legacy/immediate-publication value.  A scheduled
+        # listing becomes visible automatically once its UTC instant arrives.
+        or_(Vehicle.published_at.is_(None), Vehicle.published_at <= now),
     )
 
 
@@ -345,6 +362,154 @@ def _parse_availability(value: str) -> AvailabilityStatus:
         )
 
 
+def _notify_availability_subscribers(
+    db: Session,
+    vehicle: Vehicle,
+    previous: AvailabilityStatus,
+    next_status: AvailabilityStatus,
+) -> None:
+    """Dispatch one transition notification per active subscription.
+
+    Subscriptions are one-shot: once a customer has been told that the
+    vehicle changed state, the subscription is closed.  This prevents a
+    stale Notify Me request from producing repeated alerts on later changes.
+    """
+    subscriptions = (
+        db.query(VehicleAvailabilitySubscription)
+        .filter(
+            VehicleAvailabilitySubscription.vehicle_id == vehicle.id,
+            VehicleAvailabilitySubscription.is_active.is_(True),
+        )
+        .all()
+    )
+    if not subscriptions:
+        return
+
+    title = f"{vehicle.year} {vehicle.make} {vehicle.model} availability update"
+    body = (
+        f"The {vehicle.year} {vehicle.make} {vehicle.model} "
+        f"is now {next_status.value} (previously {previous.value})."
+    )
+    for subscription in subscriptions:
+        result = dispatch_to_user(
+            db,
+            user=subscription.user,
+            title=title,
+            body=body,
+            category=NotificationCategory.sales,
+            channels=["in_app", "email", "push"],
+            deep_link=f"/vehicles/{vehicle.id}",
+        )
+        # Delivery errors are allowed to abort the enclosing transaction so
+        # the subscription is not marked complete without a notification.
+        if result.in_app_created or result.email_sent or result.push_sent:
+            subscription.is_active = False
+            subscription.notified_at = datetime.now(timezone.utc)
+
+
+def subscribe_to_vehicle_availability(
+    db: Session, vehicle_id: str, user_id: str
+) -> VehicleAvailabilitySubscription:
+    vehicle = (
+        db.query(Vehicle)
+        .filter(Vehicle.id == vehicle_id, Vehicle.deleted_at.is_(None))
+        .one_or_none()
+    )
+    if not vehicle:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found")
+
+    existing = (
+        db.query(VehicleAvailabilitySubscription)
+        .filter(
+            VehicleAvailabilitySubscription.vehicle_id == vehicle_id,
+            VehicleAvailabilitySubscription.user_id == user_id,
+        )
+        .one_or_none()
+    )
+    if existing:
+        if existing.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Notify Me subscription already exists",
+            )
+        existing.is_active = True
+        existing.notified_at = None
+        db.commit()
+        db.refresh(existing)
+        return existing
+
+    subscription = VehicleAvailabilitySubscription(vehicle_id=vehicle_id, user_id=user_id, is_active=True)
+    db.add(subscription)
+    db.commit()
+    db.refresh(subscription)
+    return subscription
+
+
+def unsubscribe_from_vehicle_availability(db: Session, vehicle_id: str, user_id: str) -> None:
+    subscription = (
+        db.query(VehicleAvailabilitySubscription)
+        .filter(
+            VehicleAvailabilitySubscription.vehicle_id == vehicle_id,
+            VehicleAvailabilitySubscription.user_id == user_id,
+            VehicleAvailabilitySubscription.is_active.is_(True),
+        )
+        .one_or_none()
+    )
+    if not subscription:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notify Me subscription not found")
+    subscription.is_active = False
+    db.commit()
+
+
+def subscription_to_out(subscription: VehicleAvailabilitySubscription):
+    from app.domains.inventory.schemas import VehicleAvailabilitySubscriptionOut
+
+    return VehicleAvailabilitySubscriptionOut(
+        id=subscription.id,
+        vehicleId=subscription.vehicle_id,
+        isActive=subscription.is_active,
+        notifiedAt=_iso(subscription.notified_at),
+        createdAt=_iso(subscription.created_at),
+    )
+
+
+def notify_me_status_out(
+    vehicle_id: str, subscription: VehicleAvailabilitySubscription | None
+):
+    from app.domains.inventory.schemas import NotifyMeStatusOut
+
+    if subscription and subscription.is_active:
+        return NotifyMeStatusOut(
+            vehicleId=vehicle_id,
+            subscribed=True,
+            subscriptionId=subscription.id,
+            createdAt=_iso(subscription.created_at),
+        )
+    return NotifyMeStatusOut(vehicleId=vehicle_id, subscribed=False)
+
+
+def get_vehicle_availability_subscription_status(
+    db: Session, vehicle_id: str, user_id: str
+):
+    vehicle = (
+        db.query(Vehicle)
+        .filter(Vehicle.id == vehicle_id, Vehicle.deleted_at.is_(None))
+        .one_or_none()
+    )
+    if not vehicle:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found")
+
+    subscription = (
+        db.query(VehicleAvailabilitySubscription)
+        .filter(
+            VehicleAvailabilitySubscription.vehicle_id == vehicle_id,
+            VehicleAvailabilitySubscription.user_id == user_id,
+        )
+        .one_or_none()
+    )
+    return notify_me_status_out(vehicle_id, subscription)
+
+
 def _require_branch(db: Session, branch_id: str) -> None:
     if db.get(Branch, branch_id) is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Branch not found")
@@ -440,7 +605,7 @@ def _persist_new_vehicle(db: Session, payload: VehicleCreateIn, current_user: Us
     if payload.stock_number:
         _assert_stock_unique(db, payload.stock_number)
 
-    published_at = payload.published_at
+    published_at = _normalize_publish_at(payload.published_at)
     if payload.is_published and published_at is None:
         published_at = datetime.now(timezone.utc)
 
@@ -484,6 +649,9 @@ def update_vehicle(db: Session, vehicle_id: str, payload: VehicleUpdateIn) -> Ve
     vehicle = _get_admin_vehicle(db, vehicle_id)
     data = payload.model_dump(exclude_unset=True)
 
+    if "published_at" in data:
+        data["published_at"] = _normalize_publish_at(data["published_at"])
+
     if "branch_id" in data and data["branch_id"]:
         _require_branch(db, data["branch_id"])
     if data.get("vin"):
@@ -507,7 +675,11 @@ def update_vehicle_status(
     db: Session, vehicle_id: str, payload: VehicleStatusUpdateIn
 ) -> VehicleAdminDetailOut:
     vehicle = _get_admin_vehicle(db, vehicle_id)
-    vehicle.availability = _parse_availability(payload.availability)
+    previous = vehicle.availability
+    next_status = _parse_availability(payload.availability)
+    vehicle.availability = next_status
+    if previous != next_status:
+        _notify_availability_subscribers(db, vehicle, previous, next_status)
     db.commit()
     db.refresh(vehicle)
     return _to_admin_detail(vehicle)
@@ -628,6 +800,8 @@ _BULK_COLUMN_MAP = {
     "branch_id": "branchId",
     "ispublished": "isPublished",
     "is_published": "isPublished",
+    "publishedat": "publishedAt",
+    "published_at": "publishedAt",
 }
 
 BULK_IMPORT_TEMPLATE_COLUMNS = [
@@ -645,6 +819,7 @@ BULK_IMPORT_TEMPLATE_COLUMNS = [
     "make",
     "availability",
     "isPublished",
+    "publishedAt",
 ]
 
 
@@ -672,6 +847,7 @@ def bulk_import_template_csv(db: Session) -> str:
             "Toyota",
             "available",
             "true",
+            "",
         ]
     )
     return buffer.getvalue()

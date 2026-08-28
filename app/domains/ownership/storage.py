@@ -1,5 +1,6 @@
-"""Document storage for ownership proof and warranty attachments."""
+"""Document storage for ownership proof and customer media attachments."""
 
+import mimetypes
 import uuid
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -10,6 +11,8 @@ _ALLOWED = {
     "image/png": "png",
     "image/webp": "webp",
     "application/pdf": "pdf",
+    "video/mp4": "mp4",
+    "video/quicktime": "mov",
 }
 
 #: Extensions we will write, derived from the allowlist above.
@@ -23,7 +26,7 @@ _ALLOWED_EXTENSIONS = set(_ALLOWED.values())
 
 
 class UnsupportedFileType(ValueError):
-    """Raised when an upload is not an allowed image or PDF."""
+    """Raised when an upload is not an allowed media type."""
 
 
 @runtime_checkable
@@ -58,7 +61,7 @@ class LocalStorage:
 
         raise UnsupportedFileType(
             f"Unsupported file type '{declared or suffix or 'unknown'}'. "
-            "Allowed: JPEG, PNG, WebP, PDF."
+            "Allowed: JPEG, PNG, WebP, PDF, MP4, MOV."
         )
 
     def save(self, *, content: bytes, filename: str | None, content_type: str | None) -> str:
@@ -67,10 +70,25 @@ class LocalStorage:
         (self.base_dir / key).write_bytes(content)
         return f"{self.base_url}/{key}"
 
+    def path_for_key(self, key: str) -> Path | None:
+        """Resolve a storage key without allowing path traversal."""
+        if "/" in key or "\\" in key or key in (".", "..") or ".." in key:
+            return None
+        target = (self.base_dir / key).resolve()
+        try:
+            target.relative_to(self.base_dir.resolve())
+        except ValueError:
+            return None
+        return target if target.is_file() else None
+
+    @staticmethod
+    def content_type_for_key(key: str) -> str:
+        return mimetypes.guess_type(key)[0] or "application/octet-stream"
+
     def delete(self, url: str) -> None:
         key = url.rsplit("/", 1)[-1]
-        target = self.base_dir / key
-        if target.exists():
+        target = self.path_for_key(key)
+        if target is not None:
             target.unlink()
 
 

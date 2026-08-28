@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text, func
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -57,6 +57,9 @@ class Vehicle(Base):
     quotations: Mapped[list["Quotation"]] = relationship(back_populates="vehicle")
     reservations: Mapped[list["Reservation"]] = relationship(back_populates="vehicle")
     leads: Mapped[list["Lead"]] = relationship(back_populates="vehicle")
+    availability_subscriptions: Mapped[list["VehicleAvailabilitySubscription"]] = relationship(
+        back_populates="vehicle", cascade="all, delete-orphan"
+    )
 
 
 class VehicleImage(Base):
@@ -71,3 +74,20 @@ class VehicleImage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     vehicle: Mapped["Vehicle"] = relationship(back_populates="images")
+
+
+class VehicleAvailabilitySubscription(Base):
+    """A customer's request to hear when an unavailable vehicle changes state."""
+
+    __tablename__ = "vehicle_availability_subscriptions"
+    __table_args__ = (UniqueConstraint("user_id", "vehicle_id", name="uq_vehicle_availability_subscription"),)
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=False, index=True)
+    vehicle_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("vehicles.id"), nullable=False, index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    user: Mapped["User"] = relationship(back_populates="availability_subscriptions")
+    vehicle: Mapped["Vehicle"] = relationship(back_populates="availability_subscriptions")

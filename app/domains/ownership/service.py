@@ -25,6 +25,7 @@ from app.domains.ownership.schemas import (
     _normalize_vin,
 )
 from app.domains.ownership.storage import UnsupportedFileType, storage
+from app.domains.shared.documents import normalize_document_urls
 from app.domains.shared.enums import AvailabilityStatus, OwnershipRequestStatus
 from app.domains.users.models import User, UserRole
 from app.domains.warranty import service as warranty_service
@@ -157,7 +158,7 @@ def submit_request(db: Session, user: User, payload: OwnershipRequestCreateIn) -
         registration_number=(payload.registration_number or "").strip() or None,
         inventory_vehicle_id=inventory.id if inventory else None,
         status=OwnershipRequestStatus.pending,
-        document_urls=list(payload.document_urls or []),
+        document_urls=normalize_document_urls(payload.document_urls),
         customer_notes=(payload.customer_notes or "").strip() or None,
     )
     db.add(row)
@@ -482,7 +483,7 @@ def append_documents(db: Session, user_id: str, request_id: str, urls: list[str]
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Cannot add documents to this request")
 
     merged = list(row.document_urls or [])
-    for url in urls:
+    for url in normalize_document_urls(urls):
         if url and url not in merged:
             merged.append(url)
     row.document_urls = merged
