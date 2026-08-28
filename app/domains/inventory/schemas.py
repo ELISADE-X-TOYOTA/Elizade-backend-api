@@ -208,6 +208,27 @@ class VehicleStatusUpdateIn(BaseModel):
     availability: str
 
 
+class VehicleAvailabilitySubscriptionOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    vehicleId: str
+    isActive: bool
+    notifiedAt: str | None = None
+    createdAt: str
+
+
+class NotifyMeStatusOut(BaseModel):
+    """Customer-facing subscription state for the mobile Notify Me card."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    vehicleId: str
+    subscribed: bool
+    subscriptionId: str | None = None
+    createdAt: str | None = None
+
+
 class BulkImportRowErrorOut(BaseModel):
     row: int  # 1-based row number in the file (header is row 1)
     errors: list[str]

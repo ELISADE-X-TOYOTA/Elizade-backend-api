@@ -105,6 +105,7 @@ class AppointmentBoardItemOut(BaseModel):
     technicianName: str | None = None
     jobId: str | None = None
     jobStatus: str | None = None
+    attachmentUrls: list[str] = Field(default_factory=list)
 
     @staticmethod
     def from_model(appt) -> "AppointmentBoardItemOut":
@@ -128,6 +129,7 @@ class AppointmentBoardItemOut(BaseModel):
             technicianName=_full_name(tech) if tech else None,
             jobId=appt.job.id if appt.job else None,
             jobStatus=appt.job.status.value if appt.job else None,
+            attachmentUrls=list(appt.attachment_urls or []),
         )
 
 
@@ -323,6 +325,13 @@ class CustomerAppointmentCreateIn(BaseModel):
     scheduled_at: datetime = Field(alias="scheduledAt")
     mileage_at_booking: int = Field(alias="mileageAtBooking", ge=0)
     issue_description: str = Field(alias="issueDescription", min_length=5, max_length=2000)
+    attachment_urls: list[str] = Field(default_factory=list, alias="attachmentUrls", max_length=5)
+
+
+class CustomerAppointmentRescheduleIn(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    scheduled_at: datetime = Field(alias="scheduledAt")
 
 
 class CustomerAppointmentListItemOut(BaseModel):
@@ -336,6 +345,7 @@ class CustomerAppointmentListItemOut(BaseModel):
     branchName: str
     jobId: str | None = None
     pendingAdditionalWork: bool = False
+    attachmentUrls: list[str] = Field(default_factory=list)
 
     @staticmethod
     def from_model(appt) -> "CustomerAppointmentListItemOut":
@@ -356,6 +366,7 @@ class CustomerAppointmentListItemOut(BaseModel):
             branchName=appt.branch.name if appt.branch else "",
             jobId=appt.job.id if appt.job else None,
             pendingAdditionalWork=pending,
+            attachmentUrls=list(appt.attachment_urls or []),
         )
 
 

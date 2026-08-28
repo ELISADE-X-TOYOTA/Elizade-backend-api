@@ -122,6 +122,7 @@ class TicketUpdateIn(BaseModel):
 
 class TicketMessageCreateIn(BaseModel):
     body: str = Field(min_length=1)
+    attachments: list[str] = Field(default_factory=list, max_length=5)
 
 
 class TicketMessageCreateOut(BaseModel):

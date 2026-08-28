@@ -21,6 +21,20 @@ def run_startup_migrations(engine: Engine) -> None:
     _add_users_other_name(engine)
     _migrate_otp_to_email(engine)
     _add_ticket_message_attachments(engine)
+    _ensure_jsonb_column(engine, "service_appointments", "attachment_urls")
+    _ensure_audit_actions(engine)
+
+
+def _ensure_audit_actions(engine: Engine) -> None:
+    """Add actions introduced after the initial audit enum was deployed."""
+    if engine.dialect.name != "postgresql":
+        return
+    inspector = inspect(engine)
+    if not inspector.has_table("audit_logs"):
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TYPE audit_action ADD VALUE IF NOT EXISTS 'review'"))
+        conn.execute(text("ALTER TYPE audit_action ADD VALUE IF NOT EXISTS 'merge'"))
 
 
 def _add_ticket_message_attachments(engine: Engine) -> None:

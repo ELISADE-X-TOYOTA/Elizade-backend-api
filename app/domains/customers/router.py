@@ -1,15 +1,19 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import CurrentAdmin, StaffPortalUser
 from app.domains.customers import service
 from app.domains.customers.schemas import (
+    CustomerMergeIn,
+    CustomerMergeOut,
     CustomerNoteCreate,
     CustomerNoteOut,
     CustomerProfileOut,
     CustomerTimelineOut,
     CustomerVehiclesOut,
+    DuplicateCustomerCandidateOut,
+    DuplicateCustomerReviewIn,
     PaginatedCustomersOut,
     CustomerSegmentsOut,
 )
@@ -28,6 +32,74 @@ def get_customer_segments(
     Requires Admin or Staff access.
     """
     return service.get_customer_segments_count(db)
+
+
+@router.get("/duplicates", response_model=list[DuplicateCustomerCandidateOut])
+def list_duplicate_customers(
+    _: StaffPortalUser,
+    status: str | None = Query(default=None, description="pending, confirmed, dismissed, or merged"),
+    db: Session = Depends(get_db),
+) -> list[DuplicateCustomerCandidateOut]:
+    return service.list_duplicate_customers(db, review_status=status)
+
+
+@router.post("/duplicates/detect", response_model=list[DuplicateCustomerCandidateOut])
+def detect_duplicate_customers(
+    _: StaffPortalUser,
+    db: Session = Depends(get_db),
+) -> list[DuplicateCustomerCandidateOut]:
+    return service.detect_duplicate_customers(db)
+
+
+@router.patch("/duplicates/{review_id}", response_model=DuplicateCustomerCandidateOut)
+def review_duplicate_customer(
+    review_id: str,
+    payload: DuplicateCustomerReviewIn,
+    current_user: CurrentAdmin,
+    db: Session = Depends(get_db),
+) -> DuplicateCustomerCandidateOut:
+    return service.review_duplicate_customer(
+        db,
+        review_id,
+        status_value=payload.status,
+        reviewer_id=current_user.id,
+    )
+
+
+@router.post("/duplicates/{review_id}/review", response_model=DuplicateCustomerCandidateOut)
+def review_duplicate_customer_action(
+    review_id: str,
+    payload: DuplicateCustomerReviewIn,
+    current_user: CurrentAdmin,
+    db: Session = Depends(get_db),
+) -> DuplicateCustomerCandidateOut:
+    return service.review_duplicate_customer(
+        db,
+        review_id,
+        status_value=payload.status,
+        reviewer_id=current_user.id,
+    )
+
+
+@router.post("/merge", response_model=CustomerMergeOut)
+def merge_customers(
+    payload: CustomerMergeIn,
+    current_user: CurrentAdmin,
+    db: Session = Depends(get_db),
+) -> CustomerMergeOut:
+    source_id = payload.sourceCustomerId or payload.mergedCustomerId or payload.duplicateCustomerId
+    target_id = payload.targetCustomerId or payload.survivingCustomerId or payload.keepCustomerId
+    if not source_id or not target_id:
+        raise HTTPException(
+            status_code=422,
+            detail="sourceCustomerId and targetCustomerId are required",
+        )
+    return service.merge_customers(
+        db,
+        source_customer_id=source_id,
+        target_customer_id=target_id,
+        actor_id=current_user.id,
+    )
 
 
 @router.get("", response_model=PaginatedCustomersOut)

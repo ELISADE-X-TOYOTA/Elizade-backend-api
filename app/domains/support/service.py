@@ -21,6 +21,7 @@ from app.domains.support.schemas import (
     TicketUpdateIn,
 )
 from app.domains.ownership.storage import UnsupportedFileType, storage
+from app.domains.shared.documents import DOCUMENT_URL_PREFIX, normalize_document_urls, validate_upload
 from app.domains.support.customer_schemas import (
     AttachmentUploadOut,
     CustomerTicketCreateIn,
@@ -36,6 +37,8 @@ OPEN_STATUSES = (
     TicketStatus.in_progress,
     TicketStatus.waiting_customer,
 )
+
+_ATTACHMENT_KEY = re.compile(r"^[0-9a-f]{32}\.(jpg|png|webp|pdf|mp4|mov)$")
 
 
 def get_summary(db: Session) -> SupportSummaryOut:
@@ -262,7 +265,14 @@ def update_ticket(db: Session, ticket_id: str, payload: TicketUpdateIn) -> Suppo
     return get_ticket(db, ticket_id)
 
 
-def add_staff_message(db: Session, ticket_id: str, *, staff_user: User, body: str) -> TicketMessageCreateOut:
+def add_staff_message(
+    db: Session,
+    ticket_id: str,
+    *,
+    staff_user: User,
+    body: str,
+    attachments: list[str] | None = None,
+) -> TicketMessageCreateOut:
     ticket = db.get(SupportTicket, ticket_id)
     if not ticket:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
@@ -273,6 +283,7 @@ def add_staff_message(db: Session, ticket_id: str, *, staff_user: User, body: st
         sender_type=MessageSender.staff,
         sender_id=staff_user.id,
         body=body.strip(),
+        attachments=_validate_attachments(attachments or []),
     )
     db.add(message)
 
@@ -380,34 +391,12 @@ def get_customer_ticket(db: Session, user_id: str, ticket_id: str) -> CustomerTi
     return CustomerTicketDetailOut.from_model(_get_customer_ticket(db, user_id, ticket_id))
 
 
-#: Prefix of every URL our own document storage hands out.
-_ATTACHMENT_URL_PREFIX = "/media/documents/"
-#: Storage keys are `<uuid-hex>.<ext>` — nothing else is ours.
-_ATTACHMENT_KEY = re.compile(r"^[0-9a-f]{32}\.[a-z0-9]{1,5}$")
-
-
-#: Matches the ownership document cap — same store, same limit.
-_MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
-
-
 def upload_attachment(file: UploadFile) -> AttachmentUploadOut:
-    """Store one reply attachment and hand back its URL.
-
-    Reuses the shared document storage (`/media/documents`) rather than
-    standing up a second bucket and static mount — it already enforces the
-    image/PDF allowlist, which is what keeps an uploaded `.html` from being
-    served back as script from our own origin.
-    """
+    """Store one support attachment and hand back its authenticated URL."""
     content = file.file.read()
-    if len(content) > _MAX_ATTACHMENT_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="File too large (max 10MB)",
-        )
-    if not content:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file")
+    content_type = validate_upload(content, file.filename, file.content_type)
     try:
-        url = storage.save(content=content, filename=file.filename, content_type=file.content_type)
+        url = storage.save(content=content, filename=file.filename, content_type=content_type)
     except UnsupportedFileType as exc:
         raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=str(exc)) from exc
     return AttachmentUploadOut(url=url)
@@ -419,25 +408,15 @@ def _validate_attachments(urls: list[str]) -> list[str]:
     SECURITY: without this the field is an arbitrary-URL sink. A customer could
     reply with `https://attacker.example/pixel.png`, and the staff console would
     dutifully render it — leaking agent IPs and read receipts, or serving
-    something worse. Requiring our own storage prefix AND the uuid key shape
-    means a stored attachment can only ever be a file that came through
-    `POST /support/attachments/upload`, which is itself content-type checked.
+    something worse. Requiring our own storage prefix and a safe single
+    storage key means attachment references cannot escape the authenticated
+    media endpoint.
     """
-    cleaned: list[str] = []
-    for raw in urls:
-        url = (raw or "").strip()
-        if not url:
-            continue
-        if not url.startswith(_ATTACHMENT_URL_PREFIX):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Attachments must be uploaded via /support/attachments/upload",
-            )
-        key = url[len(_ATTACHMENT_URL_PREFIX) :]
-        if not _ATTACHMENT_KEY.match(key):
+    cleaned = normalize_document_urls(urls)
+    for url in cleaned:
+        key = url[len(DOCUMENT_URL_PREFIX) :]
+        if not _ATTACHMENT_KEY.fullmatch(key):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid attachment reference")
-        if url not in cleaned:
-            cleaned.append(url)
     return cleaned
 
 

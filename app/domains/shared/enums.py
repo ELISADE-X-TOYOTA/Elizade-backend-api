@@ -180,4 +180,13 @@ class AuditAction(str, enum.Enum):
     status_change = "status_change"
     assign = "assign"
     login = "login"
+    review = "review"
+    merge = "merge"
+
+
+class DuplicateReviewStatus(str, enum.Enum):
+    pending = "pending"
+    confirmed = "confirmed"
+    dismissed = "dismissed"
+    merged = "merged"
 

@@ -3,7 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -45,6 +45,7 @@ class ServiceAppointment(Base):
         Enum(AppointmentStatus, name="appointment_status"), default=AppointmentStatus.requested, nullable=False
     )
     issue_description: Mapped[str] = mapped_column(Text, nullable=False)
+    attachment_urls: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
     estimated_completion: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     technician_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     mileage_at_booking: Mapped[int] = mapped_column(Integer, nullable=False)

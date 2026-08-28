@@ -4,8 +4,8 @@ Import all ORM models so SQLAlchemy registers tables on Base.metadata before cre
 
 from app.domains.audit.models import AuditLog
 from app.domains.branches.models import Branch
-from app.domains.customers.models import CustomerNote, OwnedVehicle, WatchlistItem
-from app.domains.inventory.models import Vehicle, VehicleImage
+from app.domains.customers.models import CustomerDuplicateReview, CustomerNote, OwnedVehicle, WatchlistItem
+from app.domains.inventory.models import Vehicle, VehicleAvailabilitySubscription, VehicleImage
 from app.domains.leads.models import Lead, LeadNote
 from app.domains.notifications.models import BroadcastCampaign, NotificationRule, UserNotification
 from app.domains.ownership.models import VehicleOwnershipRequest
@@ -35,6 +35,7 @@ __all__ = [
     "Branch",
     "BroadcastCampaign",
     "CustomerNote",
+    "CustomerDuplicateReview",
     "Lead",
     "LeadNote",
     "NotificationRule",
@@ -62,6 +63,7 @@ __all__ = [
     "UserNotification",
     "VehicleOwnershipRequest",
     "Vehicle",
+    "VehicleAvailabilitySubscription",
     "VehicleImage",
     "WarrantyCertificate",
     "WarrantyClaim",

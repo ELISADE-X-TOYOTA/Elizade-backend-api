@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -16,8 +16,17 @@ from app.domains.support.schemas import (
     TicketMessageCreateOut,
     TicketUpdateIn,
 )
+from app.domains.support.customer_schemas import AttachmentUploadOut
 
 router = APIRouter(prefix="/admin/support", tags=["admin-support"])
+
+
+@router.post("/attachments/upload", response_model=AttachmentUploadOut)
+def upload_attachment(
+    _: StaffPortalUser,
+    file: UploadFile = File(...),
+) -> AttachmentUploadOut:
+    return service.upload_attachment(file)
 
 
 @router.get("/summary", response_model=SupportSummaryOut)
@@ -98,7 +107,13 @@ def reply_to_ticket(
     current_user: StaffPortalUser,
     db: Session = Depends(get_db),
 ) -> TicketMessageCreateOut:
-    return service.add_staff_message(db, ticket_id, staff_user=current_user, body=payload.body)
+    return service.add_staff_message(
+        db,
+        ticket_id,
+        staff_user=current_user,
+        body=payload.body,
+        attachments=payload.attachments,
+    )
 
 
 @router.post("/tickets/{ticket_id}/resolve", response_model=SupportTicketDetailOut)

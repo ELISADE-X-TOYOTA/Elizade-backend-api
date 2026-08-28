@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, File, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -8,10 +8,12 @@ from app.domains.service.schemas import (
     CustomerAdditionalWorkDecisionIn,
     CustomerAppointmentCreateIn,
     CustomerAppointmentListItemOut,
+    CustomerAppointmentRescheduleIn,
     CustomerServiceTrackOut,
     JobDetailOut,
     PaginatedHistoryOut,
 )
+from app.domains.ownership.schemas import DocumentUploadOut
 
 router = APIRouter(prefix="/service", tags=["customer-service"])
 
@@ -31,6 +33,33 @@ def book_appointment(
     db: Session = Depends(get_db),
 ) -> CustomerAppointmentListItemOut:
     return service.create_customer_appointment(db, current_user, payload)
+
+
+@router.patch("/appointments/{appointment_id}/reschedule", response_model=CustomerAppointmentListItemOut)
+def reschedule_appointment(
+    appointment_id: str,
+    payload: CustomerAppointmentRescheduleIn,
+    current_user: CustomerUser,
+    db: Session = Depends(get_db),
+) -> CustomerAppointmentListItemOut:
+    return service.reschedule_customer_appointment(db, current_user.id, appointment_id, payload)
+
+
+@router.post("/appointments/{appointment_id}/cancel", response_model=CustomerAppointmentListItemOut)
+def cancel_appointment(
+    appointment_id: str,
+    current_user: CustomerUser,
+    db: Session = Depends(get_db),
+) -> CustomerAppointmentListItemOut:
+    return service.cancel_customer_appointment(db, current_user.id, appointment_id)
+
+
+@router.post("/attachments/upload", response_model=DocumentUploadOut)
+def upload_appointment_attachment(
+    _: CustomerUser,
+    file: UploadFile = File(...),
+) -> DocumentUploadOut:
+    return service.upload_customer_appointment_attachment(file)
 
 
 @router.get("/appointments/{appointment_id}/track", response_model=CustomerServiceTrackOut)
