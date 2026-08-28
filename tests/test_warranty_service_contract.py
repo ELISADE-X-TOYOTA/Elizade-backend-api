@@ -57,10 +57,16 @@ def test_eligibility_returns_every_field_the_client_renders(
     for key in (
         "eligible", "reason", "inServiceDate", "coverageEnd",
         "mileageLimitKm", "warrantyMonths", "currentMileage", "certificateNumber",
+        "batteryFreeMonths", "batteryPartialMonths", "batteryFreeCoverageEnd",
+        "batteryPartialCoverageEnd", "batteryStatus", "batteryEligible",
     ):
         assert key in body, f"{key} missing — the app's DTO declares it"
     assert body["eligible"] is True
     assert body["currentMileage"] == 5_000
+    assert body["batteryFreeMonths"] == 24
+    assert body["batteryPartialMonths"] == 36
+    assert body["batteryStatus"] in ("free", "partial", "expired", "unknown")
+    assert body["coverageEnd"] is not None
 
 
 def test_eligibility_reports_an_out_of_cover_vehicle(
@@ -110,6 +116,52 @@ def test_eligibility_404s_on_another_customers_vehicle(
 
 def test_eligibility_requires_the_vehicle_id(client, customer_headers):
     assert client.get(f"{WARRANTY}/eligibility", headers=customer_headers).status_code == 422
+
+
+def test_eligibility_coverage_end_without_certificate(
+    client, customer_headers, owned_vehicle_factory
+):
+    """coverageEnd is derived from in-service date even when no cert row exists."""
+    from datetime import datetime, timezone
+
+    from app.domains.warranty.policy import warranty_end_from_in_service
+
+    in_service = datetime(2024, 6, 1, tzinfo=timezone.utc)
+    owned = owned_vehicle_factory(vin="JTDB1234567890888", purchase_date=in_service, mileage=3_000)
+
+    body = client.get(
+        f"{WARRANTY}/eligibility", params={"ownedVehicleId": owned.id}, headers=customer_headers
+    ).json()
+    assert body["certificateNumber"] is None
+    assert body["coverageEnd"] == warranty_end_from_in_service(in_service).isoformat()
+
+
+def test_claim_updates_vehicle_mileage(client, customer_headers, owned_vehicle_factory, db_session):
+    from datetime import datetime, timezone
+
+    from app.domains.customers.models import OwnedVehicle
+
+    owned = owned_vehicle_factory(
+        vin="WTYCLM0000000002",
+        mileage=5000,
+        purchase_date=datetime.now(timezone.utc),
+    )
+
+    res = client.post(
+        f"{WARRANTY}/claims",
+        headers=customer_headers,
+        json={
+            "ownedVehicleId": owned.id,
+            "claimType": "Electrical",
+            "description": "Battery drain overnight after parking for two days",
+            "currentMileage": 6200,
+        },
+    )
+    assert res.status_code == 201
+
+    db_session.refresh(owned)
+    row = db_session.get(OwnedVehicle, owned.id)
+    assert row.mileage == 6200
 
 
 # ── Service history filtering ────────────────────────────────────────────

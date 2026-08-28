@@ -1,6 +1,8 @@
 from datetime import datetime
 from decimal import Decimal
 
+from typing import Annotated
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -155,7 +157,7 @@ class VehicleCreateIn(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     vin: str | None = Field(default=None, max_length=17)
-    stock_number: str | None = Field(default=None, alias="stockNumber", max_length=50)
+    stock_number: Annotated[str | None, Field(alias="stockNumber", max_length=50)] = None
     make: str = Field(default="Toyota", min_length=1, max_length=50)
     model: str = Field(min_length=1, max_length=100)
     trim: str = Field(min_length=1, max_length=100)
@@ -163,9 +165,9 @@ class VehicleCreateIn(BaseModel):
     color: str = Field(min_length=1, max_length=100)
     color_hex: str = Field(default="#000000", alias="colorHex", max_length=7)
     price: Decimal = Field(gt=0)
-    promotional_price: Decimal | None = Field(default=None, alias="promotionalPrice", gt=0)
+    promotional_price: Annotated[Decimal | None, Field(alias="promotionalPrice", gt=0)] = None
     is_promotional: bool = Field(default=False, alias="isPromotional")
-    promotion_label: str | None = Field(default=None, alias="promotionLabel", max_length=200)
+    promotion_label: Annotated[str | None, Field(alias="promotionLabel", max_length=200)] = None
     fuel_type: str = Field(alias="fuelType", min_length=1, max_length=50)
     transmission: str = Field(min_length=1, max_length=50)
     engine: str = Field(min_length=1, max_length=100)
@@ -174,7 +176,7 @@ class VehicleCreateIn(BaseModel):
     branch_id: str = Field(alias="branchId")
     specs: dict = Field(default_factory=dict)
     is_published: bool = Field(default=True, alias="isPublished")
-    published_at: datetime | None = Field(default=None, alias="publishedAt")
+    published_at: Annotated[datetime | None, Field(alias="publishedAt")] = None
 
 
 class VehicleUpdateIn(BaseModel):
@@ -183,25 +185,25 @@ class VehicleUpdateIn(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     vin: str | None = Field(default=None, max_length=17)
-    stock_number: str | None = Field(default=None, alias="stockNumber", max_length=50)
+    stock_number: Annotated[str | None, Field(alias="stockNumber", max_length=50)] = None
     make: str | None = Field(default=None, min_length=1, max_length=50)
     model: str | None = Field(default=None, min_length=1, max_length=100)
     trim: str | None = Field(default=None, min_length=1, max_length=100)
     year: int | None = Field(default=None, ge=1900, le=2100)
     color: str | None = Field(default=None, min_length=1, max_length=100)
-    color_hex: str | None = Field(default=None, alias="colorHex", max_length=7)
+    color_hex: Annotated[str | None, Field(alias="colorHex", max_length=7)] = None
     price: Decimal | None = Field(default=None, gt=0)
-    promotional_price: Decimal | None = Field(default=None, alias="promotionalPrice", gt=0)
-    is_promotional: bool | None = Field(default=None, alias="isPromotional")
-    promotion_label: str | None = Field(default=None, alias="promotionLabel", max_length=200)
-    fuel_type: str | None = Field(default=None, alias="fuelType", min_length=1, max_length=50)
+    promotional_price: Annotated[Decimal | None, Field(alias="promotionalPrice", gt=0)] = None
+    is_promotional: Annotated[bool | None, Field(alias="isPromotional")] = None
+    promotion_label: Annotated[str | None, Field(alias="promotionLabel", max_length=200)] = None
+    fuel_type: Annotated[str | None, Field(alias="fuelType", min_length=1, max_length=50)] = None
     transmission: str | None = Field(default=None, min_length=1, max_length=50)
     engine: str | None = Field(default=None, min_length=1, max_length=100)
     mileage: int | None = Field(default=None, ge=0)
-    branch_id: str | None = Field(default=None, alias="branchId")
+    branch_id: Annotated[str | None, Field(alias="branchId")] = None
     specs: dict | None = None
-    is_published: bool | None = Field(default=None, alias="isPublished")
-    published_at: datetime | None = Field(default=None, alias="publishedAt")
+    is_published: Annotated[bool | None, Field(alias="isPublished")] = None
+    published_at: Annotated[datetime | None, Field(alias="publishedAt")] = None
 
 
 class VehicleStatusUpdateIn(BaseModel):

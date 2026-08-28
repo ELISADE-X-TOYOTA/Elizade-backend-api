@@ -1,9 +1,12 @@
-from fastapi import APIRouter, Depends, File, UploadFile
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import CustomerUser
 from app.domains.support import service
+from app.domains.support.schemas import TicketMessageOut
 from app.domains.support.customer_schemas import (
     AttachmentUploadOut,
     CustomerTicketCreateIn,
@@ -53,6 +56,25 @@ def reply_to_ticket(
     return service.add_customer_message(
         db, current_user.id, ticket_id, payload.body, payload.attachments
     )
+
+
+@router.get("/tickets/{ticket_id}/messages", response_model=list[TicketMessageOut])
+def list_ticket_messages(
+    ticket_id: str,
+    current_user: CustomerUser,
+    since: datetime | None = Query(
+        default=None,
+        description="ISO-8601. Returns only messages created strictly after this instant.",
+    ),
+    db: Session = Depends(get_db),
+) -> list[TicketMessageOut]:
+    """Messages on a ticket, for catching up after a dropped connection.
+
+    The realtime socket is best-effort; this is the guarantee. A client that
+    reconnects asks for everything after the last message it holds, so nothing
+    sent during the outage is lost.
+    """
+    return service.list_customer_messages_since(db, current_user.id, ticket_id, since)
 
 
 @router.post("/attachments/upload", response_model=AttachmentUploadOut)

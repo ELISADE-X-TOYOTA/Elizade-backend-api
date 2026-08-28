@@ -71,3 +71,9 @@ def send_campaign(
     db: Session = Depends(get_db),
 ) -> CampaignSendOut:
     return service.send_campaign(db, campaign_id)
+
+
+@router.post("/rules/run-due")
+def run_due_rules(current_user: CurrentAdmin, db: Session = Depends(get_db)) -> dict:
+    """Evaluate every active rule once — the endpoint a daily cron calls."""
+    return service.evaluate_due_rules(db)

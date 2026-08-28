@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -71,3 +71,68 @@ class UserNotification(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     user: Mapped["User"] = relationship(back_populates="notifications")
+
+
+class NotificationDelivery(Base):
+    """Per-channel outcome for one notification.
+
+    Without this a failed send is invisible: a bounced email or a dead push
+    token leaves the customer uninformed and nobody any the wiser. It is also
+    what makes retries possible and answers "why didn't they get it?" —
+    a suppressed channel writes a row saying so rather than silently vanishing.
+    """
+
+    __tablename__ = "notification_deliveries"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    notification_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("user_notifications.id"), nullable=True, index=True
+    )
+    user_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=False, index=True)
+    #: Catalogue event key, e.g. "support.staff_replied". Null for broadcasts.
+    event_key: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    channel: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class DeviceToken(Base):
+    """A push token for one installation.
+
+    Keyed on the token, not the user: the same person may have a phone and a
+    tablet, and reinstalling issues a fresh token for the same device. Rows are
+    pruned when the push provider reports the token as dead.
+    """
+
+    __tablename__ = "device_tokens"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=False, index=True)
+    token: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    platform: Mapped[str] = mapped_column(String(20), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class NotificationPreference(Base):
+    """Per-category, per-channel opt-out.
+
+    Absence means "use the catalogue default", so a new category or channel
+    works without backfilling a row for every user. Only deviations are stored.
+    """
+
+    __tablename__ = "notification_preferences"
+    __table_args__ = (UniqueConstraint("user_id", "category", "channel", name="uq_notif_pref"),)
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=False, index=True)
+    category: Mapped[NotificationCategory] = mapped_column(
+        Enum(NotificationCategory, name="notification_category"), nullable=False
+    )
+    channel: Mapped[str] = mapped_column(String(20), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)

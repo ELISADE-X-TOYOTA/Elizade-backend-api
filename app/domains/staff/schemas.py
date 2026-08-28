@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
@@ -17,13 +19,13 @@ class StaffCreateIn(BaseModel):
 class StaffUpdateIn(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    first_name: str | None = Field(default=None, alias="firstName", max_length=100)
-    last_name: str | None = Field(default=None, alias="lastName", max_length=100)
+    first_name: Annotated[str | None, Field(alias="firstName", max_length=100)] = None
+    last_name: Annotated[str | None, Field(alias="lastName", max_length=100)] = None
     email: EmailStr | None = None
     department: str | None = Field(default=None, max_length=100)
     city: str | None = Field(default=None, max_length=100)
     state: str | None = Field(default=None, max_length=100)
-    is_active: bool | None = Field(default=None, alias="isActive")
+    is_active: Annotated[bool | None, Field(alias="isActive")] = None
 
 
 class StaffOut(BaseModel):
@@ -37,6 +39,7 @@ class StaffOut(BaseModel):
     department: str
     city: str
     state: str
+    role: str
     isActive: bool
     isVerified: bool
     createdAt: str

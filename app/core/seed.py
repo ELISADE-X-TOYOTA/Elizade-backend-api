@@ -1,9 +1,12 @@
+import logging
+
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.seed_demo_data import seed_demo_data
 from app.domains.users.models import DEFAULT_PREFERENCES, User, UserRole
 
+logger = logging.getLogger("elizade.seed")
 settings = get_settings()
 
 
@@ -57,5 +60,24 @@ def seed_admin_user(db: Session) -> None:
 
 
 def seed_all(db: Session) -> None:
+    """Boot-time seeding.
+
+    The admin account is ESSENTIAL and always runs — it is the only way into
+    the admin portal, and `seed_admin_user` repairs an existing one rather than
+    duplicating it. Gating that behind a flag would lock a fresh deployment out
+    of its own back office.
+
+    The demo content is not essential and is gated on `SEED_DEMO_DATA`. It adds
+    ~75s to startup against a remote database and would otherwise fill a live
+    database with sample Toyotas on first deploy.
+    """
     seed_admin_user(db)
+
+    # Read at call time, not import time, so a test (or a restart with a
+    # changed .env) sees the current value.
+    if not get_settings().seed_demo_data:
+        logger.info("SEED_DEMO_DATA is off — skipping demo content.")
+        return
+
+    logger.info("SEED_DEMO_DATA is on — seeding demo content.")
     seed_demo_data(db)

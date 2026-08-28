@@ -78,7 +78,7 @@ def dispatch_to_user(
         email_sent = True
 
     if CHANNEL_PUSH in normalized and _user_wants_channel(user, CHANNEL_PUSH, category):
-        push_service.send(user_id=user.id, title=title, body=body, deep_link=deep_link)
+        push_service.send(user_id=user.id, title=title, body=body, deep_link=deep_link, db=db)
         push_sent = True
 
     return DispatchResult(

@@ -1,5 +1,7 @@
 from datetime import datetime
 
+from typing import Annotated
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -117,7 +119,7 @@ class TicketUpdateIn(BaseModel):
 
     status: str | None = None
     priority: str | None = None
-    assigned_to_id: str | None = Field(default=None, alias="assignedToId")
+    assigned_to_id: Annotated[str | None, Field(alias="assignedToId")] = None
 
 
 class TicketMessageCreateIn(BaseModel):
@@ -145,9 +147,9 @@ class SupportSummaryOut(BaseModel):
 class SlaConfigUpdateIn(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    response_hours: int | None = Field(default=None, alias="responseHours", ge=1, le=720)
-    resolution_hours: int | None = Field(default=None, alias="resolutionHours", ge=1, le=720)
-    is_active: bool | None = Field(default=None, alias="isActive")
+    response_hours: Annotated[int | None, Field(alias="responseHours", ge=1, le=720)] = None
+    resolution_hours: Annotated[int | None, Field(alias="resolutionHours", ge=1, le=720)] = None
+    is_active: Annotated[bool | None, Field(alias="isActive")] = None
 
 
 class TicketCreateIn(BaseModel):

@@ -13,6 +13,8 @@ from app.domains.warranty.schemas import (
     WarrantyClaimListItemOut,
     WarrantyEligibilityOut,
 )
+from app.services import uploads
+from app.services.uploads import save_upload
 
 router = APIRouter(prefix="/warranty", tags=["customer-warranty"])
 
@@ -48,7 +50,8 @@ def upload_claim_attachment(
     current_user: CustomerUser,
     file: UploadFile = File(...),
 ) -> DocumentUploadOut:
-    return ownership_service.upload_document(file)
+    # Claim evidence gets its own folder — see services/uploads.py.
+    return DocumentUploadOut(url=save_upload(file, uploads.warranty_storage))
 
 
 @router.post("/claims", response_model=WarrantyClaimListItemOut, status_code=201)

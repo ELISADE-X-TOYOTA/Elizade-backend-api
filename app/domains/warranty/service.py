@@ -18,10 +18,15 @@ from app.domains.warranty.models import RecallCampaign, RecallVehicle, WarrantyC
 from app.domains.warranty.policy import (
     BASIC_WARRANTY_KM,
     BASIC_WARRANTY_MONTHS,
+    BATTERY_FREE_MONTHS,
+    BATTERY_PARTIAL_MONTHS,
     DEFAULT_COVERAGE_DETAILS,
+    battery_warranty_status,
     is_within_basic_warranty,
     warranty_end_from_in_service,
 )
+from app.domains.notifications import catalog
+from app.domains.notifications.notify import safe_notify
 from app.domains.warranty.schemas import (
     CertificateCreateIn,
     ClaimCreateIn,
@@ -117,6 +122,12 @@ def get_claim(db: Session, claim_id: str) -> WarrantyClaimListItemOut:
     return WarrantyClaimListItemOut.from_model(claim)
 
 
+def _vehicle_label(vehicle) -> str:
+    if vehicle is None:
+        return "your vehicle"
+    return " ".join(str(p) for p in (vehicle.year, vehicle.make, vehicle.model) if p)
+
+
 def update_claim(db: Session, claim_id: str, payload: ClaimUpdateIn) -> WarrantyClaimListItemOut:
     claim = (
         db.query(WarrantyClaim)
@@ -154,6 +165,32 @@ def update_claim(db: Session, claim_id: str, payload: ClaimUpdateIn) -> Warranty
 
     db.commit()
     db.refresh(claim)
+
+    # Only a decision is worth interrupting someone for — an internal
+    # reassignment or a note is not.
+    if payload.status is not None:
+        if claim.status == ClaimStatus.approved:
+            safe_notify(
+                db,
+                user=claim.customer,
+                event=catalog.WARRANTY_CLAIM_APPROVED,
+                context={
+                    "claim_type": claim.claim_type,
+                    "vehicle_label": _vehicle_label(claim.owned_vehicle),
+                },
+            )
+        elif claim.status == ClaimStatus.rejected:
+            safe_notify(
+                db,
+                user=claim.customer,
+                event=catalog.WARRANTY_CLAIM_REJECTED,
+                context={
+                    "claim_type": claim.claim_type,
+                    "vehicle_label": _vehicle_label(claim.owned_vehicle),
+                    "reason": claim.resolution_notes or "Please contact your branch for details.",
+                },
+            )
+
     return WarrantyClaimListItemOut.from_model(claim)
 
 
@@ -439,15 +476,31 @@ def check_eligibility(db: Session, user_id: str, owned_vehicle_id: str) -> dict:
         .order_by(WarrantyCertificate.created_at.desc())
         .first()
     )
+    coverage_end = None
+    if cert:
+        coverage_end = cert.coverage_end
+    elif vehicle.purchase_date:
+        coverage_end = warranty_end_from_in_service(vehicle.purchase_date)
+
+    battery_status, battery_eligible, battery_free_end, battery_partial_end = battery_warranty_status(
+        in_service_date=vehicle.purchase_date,
+    )
+
     return {
         "eligible": eligible,
         "reason": reason,
         "inServiceDate": vehicle.purchase_date.isoformat() if vehicle.purchase_date else None,
-        "coverageEnd": cert.coverage_end.isoformat() if cert else None,
+        "coverageEnd": coverage_end.isoformat() if coverage_end else None,
         "mileageLimitKm": BASIC_WARRANTY_KM,
         "warrantyMonths": BASIC_WARRANTY_MONTHS,
         "currentMileage": vehicle.mileage,
         "certificateNumber": cert.certificate_number if cert else None,
+        "batteryFreeMonths": BATTERY_FREE_MONTHS,
+        "batteryPartialMonths": BATTERY_PARTIAL_MONTHS,
+        "batteryFreeCoverageEnd": battery_free_end.isoformat() if battery_free_end else None,
+        "batteryPartialCoverageEnd": battery_partial_end.isoformat() if battery_partial_end else None,
+        "batteryStatus": battery_status,
+        "batteryEligible": battery_eligible,
     }
 
 
@@ -471,6 +524,9 @@ def submit_customer_claim(db: Session, user_id: str, payload: ClaimCreateIn) -> 
     if not eligible:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=reason or "Not eligible")
 
+    if payload.current_mileage is not None and mileage != vehicle.mileage:
+        vehicle.mileage = mileage
+
     cert = (
         db.query(WarrantyCertificate)
         .filter(
@@ -493,6 +549,13 @@ def submit_customer_claim(db: Session, user_id: str, payload: ClaimCreateIn) -> 
     )
     db.add(claim)
     db.commit()
+
+    safe_notify(
+        db,
+        user=db.get(User, user_id),
+        event=catalog.WARRANTY_CLAIM_RECEIVED,
+        context={"claim_type": claim.claim_type, "vehicle_label": _vehicle_label(vehicle)},
+    )
 
     loaded = (
         db.query(WarrantyClaim)

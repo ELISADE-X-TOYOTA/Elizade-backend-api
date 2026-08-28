@@ -22,21 +22,22 @@ _ALLOWED_CONTENT_TYPES = frozenset(
     }
 )
 
-_EXTENSIONS = {
+_CONTENT_TYPE_TO_EXTENSION = {
     "image/jpeg": "jpg",
     "image/jpg": "jpg",
     "image/png": "png",
     "image/webp": "webp",
     "application/pdf": "pdf",
-    "video/mp4": "mp4",
-    "video/quicktime": "mov",
 }
-_SAFE_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_ALLOWED_EXTENSIONS = frozenset(_CONTENT_TYPE_TO_EXTENSION.values())
+
+
+class UnsupportedUploadExtension(ValueError):
+    """Raised when an upload's type cannot be mapped to a safe file extension."""
 
 
 def validate_upload_content_type(content_type: str | None) -> None:
-    declared = (content_type or "").lower().split(";", 1)[0].strip()
-    if declared not in _ALLOWED_CONTENT_TYPES:
+    if (content_type or "").lower().split(";")[0].strip() not in _ALLOWED_CONTENT_TYPES:
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail="Only JPEG, PNG, WebP, PDF, MP4, and MOV files are allowed",
@@ -135,6 +136,22 @@ def validate_upload(content: bytes, filename: str | None, content_type: str | No
                 detail=f"Video too long (max {MAX_VIDEO_DURATION_SECONDS} seconds)",
             )
     return canonical
+
+
+def upload_extension(filename: str | None, content_type: str | None) -> str:
+    """Resolve a safe extension, preferring the declared content type over the filename."""
+    declared = (content_type or "").lower().split(";")[0].strip()
+    if declared in _CONTENT_TYPE_TO_EXTENSION:
+        return _CONTENT_TYPE_TO_EXTENSION[declared]
+
+    suffix = filename.rsplit(".", 1)[1].lower() if filename and "." in filename else ""
+    if suffix in _ALLOWED_EXTENSIONS:
+        return suffix
+
+    raise UnsupportedUploadExtension(
+        f"Unsupported file type '{declared or suffix or 'unknown'}'. "
+        "Allowed: JPEG, PNG, WebP, PDF."
+    )
 
 
 def normalize_document_urls(urls: list[str] | None) -> list[str]:

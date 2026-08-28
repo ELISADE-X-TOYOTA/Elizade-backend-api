@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -53,8 +55,8 @@ class ClaimUpdateIn(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     status: str | None = None
-    resolution_notes: str | None = Field(default=None, alias="resolutionNotes")
-    assigned_to_id: str | None = Field(default=None, alias="assignedToId")
+    resolution_notes: Annotated[str | None, Field(alias="resolutionNotes")] = None
+    assigned_to_id: Annotated[str | None, Field(alias="assignedToId")] = None
 
 
 class ClaimCreateIn(BaseModel):
@@ -64,8 +66,8 @@ class ClaimCreateIn(BaseModel):
     claim_type: str = Field(alias="claimType", min_length=2, max_length=200)
     description: str = Field(min_length=10)
     conditions: str | None = Field(default=None, max_length=2000)
-    current_mileage: int | None = Field(default=None, alias="currentMileage", ge=0)
-    attachment_urls: list[str] = Field(default_factory=list, alias="attachmentUrls", max_length=5)
+    current_mileage: Annotated[int | None, Field(alias="currentMileage", ge=0)] = None
+    attachment_urls: Annotated[list[str], Field(alias="attachmentUrls", max_length=5)] = Field(default_factory=list)
 
 
 class WarrantyEligibilityOut(BaseModel):
@@ -77,6 +79,12 @@ class WarrantyEligibilityOut(BaseModel):
     warrantyMonths: int
     currentMileage: int
     certificateNumber: str | None = None
+    batteryFreeMonths: int
+    batteryPartialMonths: int
+    batteryFreeCoverageEnd: str | None = None
+    batteryPartialCoverageEnd: str | None = None
+    batteryStatus: str
+    batteryEligible: bool
 
 
 class CustomerRecallOut(BaseModel):
@@ -155,9 +163,9 @@ class CertificateCreateIn(BaseModel):
 
     owned_vehicle_id: str = Field(alias="ownedVehicleId")
     type: str = Field(default="standard")
-    coverage_start: str | None = Field(default=None, alias="coverageStart")
-    coverage_end: str | None = Field(default=None, alias="coverageEnd")
-    coverage_details: list[str] = Field(default_factory=list, alias="coverageDetails")
+    coverage_start: Annotated[str | None, Field(alias="coverageStart")] = None
+    coverage_end: Annotated[str | None, Field(alias="coverageEnd")] = None
+    coverage_details: Annotated[list[str], Field(alias="coverageDetails")] = Field(default_factory=list)
 
 
 class RecallCampaignOut(BaseModel):
@@ -195,9 +203,9 @@ class RecallCreateIn(BaseModel):
     title: str = Field(min_length=3, max_length=300)
     description: str = Field(min_length=3)
     severity: str = Field(default="medium")
-    affected_models: list[str] = Field(default_factory=list, alias="affectedModels")
-    affected_year_from: int | None = Field(default=None, alias="affectedYearFrom")
-    affected_year_to: int | None = Field(default=None, alias="affectedYearTo")
+    affected_models: Annotated[list[str], Field(alias="affectedModels")] = Field(default_factory=list)
+    affected_year_from: Annotated[int | None, Field(alias="affectedYearFrom")] = None
+    affected_year_to: Annotated[int | None, Field(alias="affectedYearTo")] = None
 
 
 class RecallNotifyOut(BaseModel):

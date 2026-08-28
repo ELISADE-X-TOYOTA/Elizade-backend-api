@@ -10,6 +10,7 @@ from app.domains.dashboard.customer_router import router as dashboard_customer_r
 from app.domains.dashboard.router import router as dashboard_router
 from app.domains.inventory.admin_router import router as inventory_admin_router
 from app.domains.inventory.router import router as inventory_router
+from app.domains.leads.customer_router import router as leads_customer_router
 from app.domains.leads.router import router as leads_router
 from app.domains.notifications.admin_router import router as notifications_admin_router
 from app.domains.notifications.router import router as notifications_router
@@ -24,6 +25,7 @@ from app.domains.support.router import router as support_router
 from app.domains.users.router import router as users_router
 from app.domains.warranty.customer_router import router as warranty_customer_router
 from app.domains.warranty.router import router as warranty_router
+from app.realtime.ticket_gateway import router as realtime_ticket_router
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(auth_router)
@@ -46,7 +48,9 @@ api_router.include_router(ownership_customer_router)
 api_router.include_router(ownership_admin_router)
 api_router.include_router(warranty_customer_router)
 api_router.include_router(warranty_router)
+api_router.include_router(realtime_ticket_router)
 api_router.include_router(analytics_router)
 api_router.include_router(service_router)
+api_router.include_router(leads_customer_router)
 api_router.include_router(sales_customer_router)
 api_router.include_router(service_customer_router)

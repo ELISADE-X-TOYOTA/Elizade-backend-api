@@ -26,6 +26,7 @@ def _to_staff_out(user: User) -> StaffOut:
         department=user.department or "",
         city=user.city,
         state=user.state,
+        role=user.role.value,
         isActive=user.is_active,
         isVerified=user.is_verified,
         createdAt=created.isoformat(),
@@ -33,10 +34,16 @@ def _to_staff_out(user: User) -> StaffOut:
     )
 
 
+def _portal_team_member(user: User | None) -> User:
+    if not user or user.role not in (UserRole.staff, UserRole.admin):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Staff member not found")
+    return user
+
+
 def list_staff(db: Session) -> list[StaffOut]:
     rows = (
         db.query(User)
-        .filter(User.role == UserRole.staff)
+        .filter(User.role.in_((UserRole.staff, UserRole.admin)))
         .order_by(User.created_at.desc())
         .all()
     )
@@ -88,9 +95,7 @@ def create_staff(db: Session, payload: StaffCreateIn) -> StaffOut:
 
 
 def update_staff(db: Session, staff_id: str, payload: StaffUpdateIn) -> StaffOut:
-    staff = db.get(User, staff_id)
-    if not staff or staff.role != UserRole.staff:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Staff member not found")
+    staff = _portal_team_member(db.get(User, staff_id))
 
     if payload.email and payload.email != staff.email:
         owner = db.query(User).filter(User.email == payload.email).one_or_none()
@@ -117,9 +122,7 @@ def update_staff(db: Session, staff_id: str, payload: StaffUpdateIn) -> StaffOut
 
 
 def send_staff_login_otp(db: Session, staff_id: str) -> dict[str, str]:
-    staff = db.get(User, staff_id)
-    if not staff or staff.role != UserRole.staff:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Staff member not found")
+    staff = _portal_team_member(db.get(User, staff_id))
     if not staff.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot send OTP to deactivated account")
     if not staff.email:

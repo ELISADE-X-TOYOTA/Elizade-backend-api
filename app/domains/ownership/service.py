@@ -1,3 +1,4 @@
+import logging
 import math
 import re
 import uuid
@@ -8,6 +9,8 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.domains.customers.models import OwnedVehicle
 from app.domains.inventory.models import Vehicle
+from app.domains.notifications import catalog
+from app.domains.notifications.notify import safe_notify
 from app.domains.ownership.models import VehicleOwnershipRequest
 from app.domains.ownership.schemas import (
     DocumentUploadOut,
@@ -32,6 +35,8 @@ ACTIVE_REQUEST_STATUSES = (
     OwnershipRequestStatus.pending_documents,
     OwnershipRequestStatus.under_review,
 )
+logger = logging.getLogger("elizade.ownership")
+
 VIN_PATTERN = re.compile(r"^[A-HJ-NPR-Z0-9]{11,17}$")
 
 
@@ -187,15 +192,11 @@ def list_my_vehicles(db: Session, user_id: str) -> list[OwnedVehicleOut]:
 
 
 def upload_document(file: UploadFile) -> DocumentUploadOut:
-    content = file.file.read()
-    from app.domains.shared.documents import validate_upload
+    """Ownership proof lives under `customer/ownership/` in the bucket."""
+    from app.services import uploads  # noqa: PLC0415 — avoids an import cycle
+    from app.services.uploads import save_upload  # noqa: PLC0415
 
-    content_type = validate_upload(content, file.filename, file.content_type)
-    try:
-        url = storage.save(content=content, filename=file.filename, content_type=content_type)
-    except UnsupportedFileType as exc:
-        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=str(exc)) from exc
-    return DocumentUploadOut(url=url)
+    return DocumentUploadOut(url=save_upload(file, uploads.ownership_storage))
 
 
 def list_requests_admin(
@@ -253,8 +254,11 @@ def _create_owned_vehicle(
     vin: str,
     registration_number: str,
     inventory: Vehicle | None,
+    purchase_date: datetime | None = None,
 ) -> OwnedVehicle:
-    now = datetime.now(timezone.utc)
+    in_service = purchase_date or datetime.now(timezone.utc)
+    if in_service.tzinfo is None:
+        in_service = in_service.replace(tzinfo=timezone.utc)
     has_primary = (
         db.query(OwnedVehicle.id).filter(OwnedVehicle.user_id == user_id, OwnedVehicle.is_primary.is_(True)).first()
         is not None
@@ -276,7 +280,7 @@ def _create_owned_vehicle(
             color_hex=inventory.color_hex,
             mileage=inventory.mileage or 0,
             registration_number=registration_number,
-            purchase_date=now,
+            purchase_date=in_service,
             image_url=primary_img.url if primary_img else None,
             is_primary=not has_primary,
         )
@@ -289,10 +293,10 @@ def _create_owned_vehicle(
             vin=vin,
             model="Toyota",
             trim="—",
-            year=now.year,
+            year=in_service.year,
             color="—",
             registration_number=registration_number,
-            purchase_date=now,
+            purchase_date=in_service,
             is_primary=not has_primary,
         )
 
@@ -347,25 +351,124 @@ def update_request_admin(
             if inventory is None:
                 inventory = _find_inventory_by_vin(db, row.vin)
 
+            in_service = payload.in_service_date or datetime.now(timezone.utc)
+            if in_service.tzinfo is None:
+                in_service = in_service.replace(tzinfo=timezone.utc)
+            if in_service > datetime.now(timezone.utc):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="In-service date cannot be in the future",
+                )
+
             owned = _create_owned_vehicle(
                 db,
                 user_id=row.user_id,
                 vin=row.vin,
                 registration_number=reg,
                 inventory=inventory,
+                purchase_date=in_service,
             )
             row.owned_vehicle_id = owned.id
             row.inventory_vehicle_id = inventory.id if inventory else row.inventory_vehicle_id
             warranty_service.issue_standard_certificate(db, owned, issued_by_id=reviewer_id)
 
+        previous_status = row.status
         row.status = new_status
         row.reviewed_by_id = reviewer_id
         row.reviewed_at = datetime.now(timezone.utc)
 
     db.commit()
     db.refresh(row)
+
+    # Tell the customer what just happened to their claim.
+    #
+    # None of these fired before: the catalogue defined the approved and
+    # rejected events but nothing ever called them, so a claim could be
+    # approved, declined, or held pending documents and the customer was
+    # never told anything. They found out by opening the app and checking.
+    #
+    # AFTER the commit, deliberately. `safe_notify` swallows its own errors,
+    # but the decision itself must be durable before we announce it — an
+    # alert about an approval that then failed to save is worse than a late
+    # alert.
+    if payload.status is not None and new_status != previous_status:
+        # Guarded here, not just inside. `safe_notify` protects the delivery
+        # itself, but `_notify_status_change` also reads the vehicle to build
+        # a label — a query that runs BEFORE any safe_notify call and could
+        # throw on its own. Whatever happens while announcing the decision,
+        # the decision is already committed and the reviewer's request must
+        # still return 200.
+        try:
+            _notify_status_change(db, row, previous_status)
+        except Exception:  # noqa: BLE001
+            logger.exception("ownership status notification failed for request %s", row.id)
+
     inv = db.get(Vehicle, row.inventory_vehicle_id) if row.inventory_vehicle_id else None
     return OwnershipRequestListItemOut.from_model(row, preview=_vehicle_preview(inv))
+
+
+#: Shown when an admin moves a claim to `pending_documents` without saying
+#: what is actually missing. Vague, but it still tells the customer the ball
+#: is in their court — which is the part that matters.
+DEFAULT_DOCUMENT_REQUEST = "additional proof of ownership documents"
+
+
+def _notify_status_change(
+    db: Session,
+    row: VehicleOwnershipRequest,
+    previous_status: OwnershipRequestStatus,
+) -> None:
+    """Send the customer-facing alert for an ownership decision."""
+    customer = row.customer
+    if customer is None:
+        return
+
+    vehicle_label = _ownership_vehicle_label(db, row)
+
+    if row.status == OwnershipRequestStatus.pending_documents:
+        safe_notify(
+            db,
+            user=customer,
+            event=catalog.OWNERSHIP_DOCUMENTS_REQUESTED,
+            context={
+                "request_id": row.id,
+                "vin": row.vin,
+                # `admin_notes` is where the reviewer writes what is missing.
+                # It is free text and optional, so it is never trusted to be
+                # present — a notification saying nothing useful still beats
+                # silence, which is what happened before.
+                "details": (row.admin_notes or "").strip() or DEFAULT_DOCUMENT_REQUEST,
+            },
+        )
+    elif row.status == OwnershipRequestStatus.approved:
+        safe_notify(
+            db,
+            user=customer,
+            event=catalog.OWNERSHIP_CLAIM_APPROVED,
+            context={"vehicle_label": vehicle_label},
+        )
+    elif row.status == OwnershipRequestStatus.rejected:
+        safe_notify(
+            db,
+            user=customer,
+            event=catalog.OWNERSHIP_CLAIM_REJECTED,
+            context={
+                "request_id": row.id,
+                "vin": row.vin,
+                "reason": (row.admin_notes or "").strip() or "please contact us for details",
+            },
+        )
+
+
+def _ownership_vehicle_label(db: Session, row: VehicleOwnershipRequest) -> str:
+    """Best available human name for the vehicle, falling back to the VIN."""
+    inv = db.get(Vehicle, row.inventory_vehicle_id) if row.inventory_vehicle_id else None
+    if inv is not None:
+        parts = [str(getattr(inv, "year", "") or ""), inv.make or "", inv.model or ""]
+        label = " ".join(p for p in parts if p).strip()
+        if label:
+            return label
+    return f"vehicle with chassis {row.vin}"
 
 
 def append_documents(db: Session, user_id: str, request_id: str, urls: list[str]) -> OwnershipRequestOut:

@@ -188,8 +188,108 @@ class SmtpEmailService(EmailService):
         )
 
 
+class PostmarkApiEmailService(EmailService):
+    """Postmark over HTTPS instead of SMTP.
+
+    WHY THIS EXISTS: Railway — like most PaaS hosts — blocks outbound SMTP
+    (25/465/587) to stop the platform being used to send spam. The symptom is
+    not a clean refusal but a long hang: the connection sits until the socket
+    timeout, so a registration request burned ~90s and then 502'd with
+    "We couldn't send your verification code".
+
+    The HTTP API uses port 443, which is never blocked, answers in a few
+    seconds, and returns a specific error code instead of a timeout. Same
+    Server API Token as the SMTP username/password.
+    """
+
+    ENDPOINT = "https://api.postmarkapp.com/email"
+
+    def __init__(self, *, token: str, from_email: str, message_stream: str = "outbound") -> None:
+        self.token = token
+        self.from_email = from_email
+        self.message_stream = message_stream
+
+    def send_otp(self, to_email: str, code: str, purpose: str) -> None:
+        self.send_notification(to_email=to_email, **_otp_payload(code, purpose))
+
+    def send_notification(
+        self,
+        *,
+        to_email: str,
+        subject: str,
+        body: str,
+        category: str,
+        html_body: str | None = None,
+    ) -> None:
+        import httpx  # noqa: PLC0415
+
+        payload = {
+            "From": formataddr(("Elizade Connect", self.from_email)),
+            "To": to_email,
+            "Subject": subject,
+            "TextBody": body,
+            "MessageStream": self.message_stream,
+        }
+        if html_body:
+            payload["HtmlBody"] = html_body
+        if category == "otp":
+            # Postmark groups by tag in its Activity view, which makes an
+            # "did the code go out?" question answerable in one click.
+            payload["Tag"] = "otp"
+
+        try:
+            response = httpx.post(
+                self.ENDPOINT,
+                json=payload,
+                headers={
+                    "X-Postmark-Server-Token": self.token,
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
+                timeout=20,
+            )
+        except httpx.HTTPError as exc:
+            logger.exception("[EMAIL:POSTMARK] unreachable")
+            raise EmailDeliveryError("Could not reach the email service.") from exc
+
+        if response.status_code == 401:
+            logger.error("[EMAIL:POSTMARK] server token rejected")
+            raise EmailDeliveryError("Email service rejected our credentials.")
+        if response.status_code >= 400:
+            # Postmark returns an ErrorCode that says WHY — 406 inactive
+            # recipient, 300 invalid address, 405 not allowed to send.
+            try:
+                detail = response.json()
+                code = detail.get("ErrorCode")
+                message = detail.get("Message", "")
+            except Exception:  # noqa: BLE001
+                code, message = response.status_code, response.text[:200]
+            logger.error("[EMAIL:POSTMARK] rejected to=%s code=%s: %s", to_email, code, message)
+            if code == 406:
+                raise EmailDeliveryError("That address is suppressed — it previously bounced.")
+            raise EmailDeliveryError("The email service rejected that message.")
+
+        logger.info("[EMAIL:POSTMARK] delivered to=%s category=%s", to_email, category)
+        print(
+            f"[EMAIL:POSTMARK] delivered to={to_email} subject={subject!r} category={category}",
+            file=sys.stdout,
+            flush=True,
+        )
+
+
 def build_email_service() -> EmailService:
     settings = get_settings()
+
+    # Preferred: the HTTP API. It works on hosts that block SMTP egress, which
+    # is most PaaS platforms, and fails fast with a reason instead of hanging.
+    if settings.postmark_api_enabled:
+        logger.info("[EMAIL] Postmark HTTP transport active (from %s)", settings.smtp_from_email)
+        return PostmarkApiEmailService(
+            token=settings.postmark_token or settings.smtp_password,
+            from_email=settings.smtp_from_email,
+            message_stream=settings.postmark_message_stream,
+        )
+
     if settings.smtp_configured:
         logger.info("[EMAIL] SMTP transport active (%s:%s)", settings.smtp_host, settings.smtp_port)
         return SmtpEmailService(

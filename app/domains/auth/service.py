@@ -11,6 +11,7 @@ from app.core.security import (
     verify_otp_hash,
 )
 from app.domains.auth.schemas import AuthTokenOut, OtpRequestIn, OtpRequestOut, OtpVerifyIn
+from app.domains.auth import refresh as refresh_service
 from app.domains.users.models import DEFAULT_PREFERENCES, OtpChallenge, OtpPurpose, User, UserRole
 from app.domains.users.schemas import UserProfileOut
 from app.services.otp import MAX_OTP_ATTEMPTS, create_and_dispatch_otp
@@ -137,7 +138,15 @@ def verify_otp(db: Session, payload: OtpVerifyIn) -> AuthTokenOut:
     db.refresh(user)
 
     token = create_access_token(user.id)
-    return AuthTokenOut(access_token=token, user=UserProfileOut.from_user(user))
+    # A refresh token is minted here and ONLY here (plus rotation). This is the
+    # single point where a new session family begins.
+    refresh = refresh_service.issue(db, user.id)
+    db.commit()
+    return AuthTokenOut(
+        access_token=token,
+        refresh_token=refresh,
+        user=UserProfileOut.from_user(user),
+    )
 
 
 def get_me(user: User) -> UserProfileOut:

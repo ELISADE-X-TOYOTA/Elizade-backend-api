@@ -62,3 +62,25 @@ def decode_access_token(token: str) -> str | None:
         return str(sub) if sub else None
     except JWTError:
         return None
+
+
+# ── Refresh tokens ───────────────────────────────────────────────────────
+#
+# A refresh token is opaque random bytes, NOT a JWT. There is nothing to read
+# from it and nothing to verify offline: it is a lookup key into a table we
+# control, which is what makes instant revocation possible. A self-contained
+# JWT cannot be revoked before it expires without exactly this table anyway.
+
+def generate_refresh_token() -> str:
+    """A 256-bit URL-safe secret. Returned to the client once, never stored."""
+    return secrets.token_urlsafe(32)
+
+
+def hash_refresh_token(token: str) -> str:
+    """SHA-256, hex. Plain digest rather than a password KDF on purpose.
+
+    A KDF defends a LOW-entropy secret against offline guessing. This secret
+    has 256 bits of entropy, so guessing is not the threat — and a slow KDF on
+    every API refresh would be a self-inflicted denial of service.
+    """
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()

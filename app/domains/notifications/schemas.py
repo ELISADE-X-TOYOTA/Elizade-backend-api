@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -60,7 +62,7 @@ class NotificationRuleUpdateIn(BaseModel):
     name: str | None = Field(default=None, max_length=200)
     channels: list[str] | None = None
     cadence: str | None = Field(default=None, max_length=100)
-    is_active: bool | None = Field(default=None, alias="isActive")
+    is_active: Annotated[bool | None, Field(alias="isActive")] = None
     config: dict | None = None
 
 
@@ -105,7 +107,7 @@ class BroadcastCampaignCreateIn(BaseModel):
     body: str = Field(min_length=1)
     segment_key: str = Field(alias="segmentKey", min_length=1, max_length=100)
     channels: list[str] = Field(min_length=1)
-    scheduled_at: str | None = Field(default=None, alias="scheduledAt")
+    scheduled_at: Annotated[str | None, Field(alias="scheduledAt")] = None
 
 
 class CampaignSendOut(BaseModel):
@@ -146,3 +148,35 @@ class MarkReadOut(BaseModel):
 
 class MarkAllReadOut(BaseModel):
     updated: int
+
+
+# ── Device tokens (push) ─────────────────────────────────────────────────
+class DeviceTokenIn(BaseModel):
+    token: str = Field(min_length=8, max_length=255)
+    platform: str = Field(default="android", pattern="^(ios|android)$")
+
+
+class DeviceTokenOut(BaseModel):
+    registered: bool
+
+
+# ── Preferences ──────────────────────────────────────────────────────────
+class PreferenceItem(BaseModel):
+    category: str
+    channel: str
+    enabled: bool
+
+
+class PreferencesOut(BaseModel):
+    #: Only deviations from the default are stored, but the API always returns
+    #: the FULL matrix — a client should not have to know the defaults to
+    #: render a settings screen correctly.
+    items: list[PreferenceItem]
+
+
+class PreferencesUpdateIn(BaseModel):
+    items: list[PreferenceItem] = Field(default_factory=list, max_length=64)
+
+
+class UnreadCountOut(BaseModel):
+    unread: int

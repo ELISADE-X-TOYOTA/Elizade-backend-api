@@ -21,20 +21,51 @@ def run_startup_migrations(engine: Engine) -> None:
     _add_users_other_name(engine)
     _migrate_otp_to_email(engine)
     _add_ticket_message_attachments(engine)
-    _ensure_jsonb_column(engine, "service_appointments", "attachment_urls")
-    _ensure_audit_actions(engine)
+    _create_notification_tables(engine)
+    _add_lead_customer_tracking(engine)
+    _create_refresh_tokens(engine)
+    _add_ticket_message_read_at(engine)
 
 
-def _ensure_audit_actions(engine: Engine) -> None:
-    """Add actions introduced after the initial audit enum was deployed."""
-    if engine.dialect.name != "postgresql":
-        return
+def _add_lead_customer_tracking(engine: Engine) -> None:
+    """Customer-visible lead notes, plus the status-event history table.
+
+    `is_customer_visible` is backfilled to FALSE, which is the point: every
+    note that already exists was written as internal staff commentary, and
+    switching customer lead tracking on must not publish it retroactively.
+    """
+    from app.domains.leads.models import LeadStatusEvent  # noqa: PLC0415 — avoids an import cycle
+
+    LeadStatusEvent.__table__.create(bind=engine, checkfirst=True)
+
     inspector = inspect(engine)
-    if not inspector.has_table("audit_logs"):
+    if not inspector.has_table("lead_notes"):
+        return
+    columns = {col["name"] for col in inspector.get_columns("lead_notes")}
+    if "is_customer_visible" in columns:
         return
     with engine.begin() as conn:
-        conn.execute(text("ALTER TYPE audit_action ADD VALUE IF NOT EXISTS 'review'"))
-        conn.execute(text("ALTER TYPE audit_action ADD VALUE IF NOT EXISTS 'merge'"))
+        conn.execute(text("ALTER TABLE lead_notes ADD COLUMN is_customer_visible BOOLEAN"))
+        conn.execute(text("UPDATE lead_notes SET is_customer_visible = false WHERE is_customer_visible IS NULL"))
+        conn.execute(text("ALTER TABLE lead_notes ALTER COLUMN is_customer_visible SET DEFAULT false"))
+        conn.execute(text("ALTER TABLE lead_notes ALTER COLUMN is_customer_visible SET NOT NULL"))
+
+
+def _create_notification_tables(engine: Engine) -> None:
+    """Delivery log, device tokens and per-category preferences.
+
+    `Base.metadata.create_all` already creates these on a fresh database; this
+    exists so an EXISTING dev database picks them up without a manual step.
+    Idempotent — `create_all` skips tables that are already there.
+    """
+    from app.domains.notifications.models import (  # noqa: PLC0415 — avoid an import cycle at module load
+        DeviceToken,
+        NotificationDelivery,
+        NotificationPreference,
+    )
+
+    for model in (NotificationDelivery, DeviceToken, NotificationPreference):
+        model.__table__.create(bind=engine, checkfirst=True)
 
 
 def _add_ticket_message_attachments(engine: Engine) -> None:
@@ -91,3 +122,49 @@ def _migrate_otp_to_email(engine: Engine) -> None:
         conn.execute(text("UPDATE otp_challenges SET email = 'legacy@elizade.local' WHERE email IS NULL"))
         conn.execute(text("ALTER TABLE otp_challenges ALTER COLUMN email SET NOT NULL"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_otp_challenges_email ON otp_challenges (email)"))
+
+
+def _create_refresh_tokens(engine: Engine) -> None:
+    """Session refresh tokens.
+
+    Created here rather than relying on create_all so an already-deployed
+    database picks it up on the next boot without a manual step.
+    """
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS refresh_tokens (
+                    id UUID PRIMARY KEY,
+                    user_id UUID NOT NULL REFERENCES users(id),
+                    token_hash VARCHAR(64) NOT NULL UNIQUE,
+                    family_id UUID NOT NULL,
+                    expires_at TIMESTAMPTZ NOT NULL,
+                    revoked_at TIMESTAMPTZ,
+                    replaced_by_id UUID,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+        )
+        # Lookup is by hash on every refresh; family lookup only on revocation.
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_refresh_tokens_user_id ON refresh_tokens(user_id)")
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_refresh_tokens_family_id ON refresh_tokens(family_id)")
+        )
+
+
+def _add_ticket_message_read_at(engine: Engine) -> None:
+    """Read receipts for ticket messages."""
+    with engine.begin() as conn:
+        exists = conn.execute(
+            text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'ticket_messages' AND column_name = 'read_at'"
+            )
+        ).first()
+        if exists:
+            return
+        conn.execute(text("ALTER TABLE ticket_messages ADD COLUMN read_at TIMESTAMPTZ"))

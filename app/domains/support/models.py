@@ -91,6 +91,10 @@ class TicketMessage(Base):
     #: JSONB list to match ``VehicleOwnershipRequest.document_urls`` rather than
     #: introducing a second, differently-shaped attachment concept.
     attachments: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    #: When the OTHER party opened this message. A ticket has exactly two
+    #: sides, so one timestamp is enough — a per-recipient receipt table would
+    #: model a group chat we do not have.
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     ticket: Mapped["SupportTicket"] = relationship(back_populates="messages")

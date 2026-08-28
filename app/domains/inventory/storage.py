@@ -56,5 +56,10 @@ class LocalStorage:
             target.unlink()
 
 
-# Module-level instance used by the service layer. Replace this to change backends.
-storage: StorageBackend = LocalStorage()
+# Inventory photography is produced by staff, so it lands under `admin/`.
+# Falls back to local disk when Spaces is unconfigured.
+from app.services.spaces import ADMIN_VEHICLES, build_storage  # noqa: E402
+
+storage: StorageBackend = build_storage(
+    ADMIN_VEHICLES, local_dir="uploads/vehicles", local_url="/media/vehicles"
+)

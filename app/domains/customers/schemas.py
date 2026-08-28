@@ -1,6 +1,8 @@
 from datetime import datetime
 from decimal import Decimal
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Annotated
+
+from pydantic import BaseModel, Field
 
 
 class OwnedVehicleBrief(BaseModel):
@@ -10,7 +12,7 @@ class OwnedVehicleBrief(BaseModel):
     model: str
     year: int
     registration_number: str = Field(alias="registrationNumber")
-    purchase_date: datetime | None = Field(default=None, alias="purchaseDate")
+    purchase_date: Annotated[datetime | None, Field(alias="purchaseDate")] = None
 
     model_config = {"from_attributes": True, "populate_by_name": True}
 
