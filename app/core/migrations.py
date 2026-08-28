@@ -25,6 +25,7 @@ def run_startup_migrations(engine: Engine) -> None:
     _add_lead_customer_tracking(engine)
     _create_refresh_tokens(engine)
     _add_ticket_message_read_at(engine)
+    _create_reminder_dispatches(engine)
 
 
 def _add_lead_customer_tracking(engine: Engine) -> None:
@@ -168,3 +169,16 @@ def _add_ticket_message_read_at(engine: Engine) -> None:
         if exists:
             return
         conn.execute(text("ALTER TABLE ticket_messages ADD COLUMN read_at TIMESTAMPTZ"))
+
+
+def _create_reminder_dispatches(engine: Engine) -> None:
+    """The sent-log that makes a daily reminder sweep safe to run.
+
+    Creating it EMPTY is deliberate and worth stating: there is no history to
+    backfill, because no sweep has ever run. The first run after this deploys
+    will therefore send each in-window vehicle its current stage once, which is
+    the intended behaviour — those customers have never been reminded at all.
+    """
+    from app.domains.notifications.models import ReminderDispatch  # noqa: PLC0415
+
+    ReminderDispatch.__table__.create(bind=engine, checkfirst=True)

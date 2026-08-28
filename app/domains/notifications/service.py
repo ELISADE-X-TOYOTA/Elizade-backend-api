@@ -8,7 +8,13 @@ from sqlalchemy.orm import Session
 
 from app.domains.customers.models import OwnedVehicle
 from app.domains.notifications.dispatcher import dispatch_to_user
-from app.domains.notifications.models import BroadcastCampaign, NotificationRule, UserNotification
+from app.domains.notifications.cadence import OVERDUE_STAGE, parse_stages, stage_for, stage_label
+from app.domains.notifications.models import (
+    BroadcastCampaign,
+    NotificationRule,
+    ReminderDispatch,
+    UserNotification,
+)
 from app.domains.notifications.schemas import (
     VALID_CHANNELS,
     VALID_SEGMENT_KEYS,
@@ -114,10 +120,23 @@ def _customers_for_segment(db: Session, segment_key: str) -> list[User]:
     return query.all()
 
 
-def _users_for_service_due_soon(db: Session, *, days: int) -> list[tuple[User, OwnedVehicle]]:
-    now = datetime.now(timezone.utc)
-    deadline = now + timedelta(days=days)
-    rows = (
+def _users_for_service_due_soon(
+    db: Session, *, days: int, now: datetime | None = None
+) -> list[tuple[User, OwnedVehicle]]:
+    """Vehicles inside the reminder window.
+
+    The lower bound is the important half. This filter used to be
+    `next_service_due <= deadline` with nothing below it, so a vehicle overdue
+    by two years matched every single sweep — harmless while nothing ran the
+    sweep, and a daily mailshot to every lapsed owner the moment a cron did.
+    """
+    moment = now or datetime.now(timezone.utc)
+    deadline = moment + timedelta(days=days)
+    # Reminders stop this far past the due date; `cadence.stage_for` applies
+    # the same cut-off, and the two must agree or the query returns rows that
+    # are then silently discarded.
+    floor = moment + timedelta(days=OVERDUE_STAGE)
+    return (
         db.query(User, OwnedVehicle)
         .join(OwnedVehicle, OwnedVehicle.user_id == User.id)
         .filter(
@@ -125,10 +144,30 @@ def _users_for_service_due_soon(db: Session, *, days: int) -> list[tuple[User, O
             User.is_active.is_(True),
             OwnedVehicle.next_service_due.isnot(None),
             OwnedVehicle.next_service_due <= deadline,
+            OwnedVehicle.next_service_due >= floor,
         )
         .all()
     )
-    return rows
+
+
+def _already_sent(db: Session, *, rule_id: str, vehicle_id: str, milestone: datetime, stage: int) -> bool:
+    """Has this exact reminder already gone out?
+
+    Keyed on the milestone (the due date it was about) so that servicing the
+    vehicle — which moves `next_service_due` — starts a fresh cycle rather
+    than being suppressed by last cycle's rows.
+    """
+    return (
+        db.query(ReminderDispatch.id)
+        .filter(
+            ReminderDispatch.rule_id == rule_id,
+            ReminderDispatch.owned_vehicle_id == vehicle_id,
+            ReminderDispatch.milestone == milestone,
+            ReminderDispatch.stage == stage,
+        )
+        .first()
+        is not None
+    )
 
 
 def _users_for_marketing_trigger(db: Session) -> list[User]:
@@ -143,7 +182,16 @@ def _users_for_marketing_trigger(db: Session) -> list[User]:
     )
 
 
-def evaluate_rule(db: Session, rule_id: str) -> RuleEvaluateOut:
+def evaluate_rule(db: Session, rule_id: str, *, now: datetime | None = None) -> RuleEvaluateOut:
+    """Run one rule.
+
+    `now` is injectable so the escalation can be tested by advancing the CLOCK
+    against a fixed due date — which is what a daily cron actually does. The
+    obvious alternative, moving the due date closer on each run, is not the
+    same thing at all: the due date IS the de-duplication key, so shifting it
+    reads as the customer rescheduling the service and correctly starts a new
+    reminder cycle every time.
+    """
     rule = db.get(NotificationRule, rule_id)
     if not rule:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification rule not found")
@@ -157,23 +205,79 @@ def evaluate_rule(db: Session, rule_id: str) -> RuleEvaluateOut:
     pushes_sent = 0
 
     if rule.trigger_key == "service_due_soon":
-        days = int(config.get("days_before", 14))
-        pairs = _users_for_service_due_soon(db, days=days)
+        stages = parse_stages(config.get("stages"))
+        # `days_before` is still honoured as the widest window so existing
+        # rules keep working, but the stages decide who is actually told.
+        window = int(config.get("days_before", max(stages)))
+        now = now or datetime.now(timezone.utc)
+        pairs = _users_for_service_due_soon(db, days=window, now=now)
         matched = len({user.id for user, _ in pairs})
+
         for user, vehicle in pairs:
+            milestone = vehicle.next_service_due
+            if milestone is None:
+                continue
+            stage = stage_for(milestone, now, stages)
+            # Outside every configured step — nothing to say yet.
+            if stage is None:
+                continue
+            # Already told them about this milestone at this step.
+            if _already_sent(db, rule_id=rule.id, vehicle_id=vehicle.id, milestone=milestone, stage=stage):
+                continue
+
             title = config.get("title") or "Service reminder"
             body = config.get("body") or (
                 f"Your {vehicle.year} {vehicle.make} {vehicle.model} "
-                f"({vehicle.registration_number}) is due for service soon."
+                f"({vehicle.registration_number}) {stage_label(stage)} for service."
             )
-            result = dispatch_to_user(
-                db,
-                user=user,
-                title=title,
-                body=body,
-                category=NotificationCategory.service,
-                channels=list(rule.channels or []),
-                deep_link=config.get("deep_link", "/service/book"),
+            # PER-RECIPIENT isolation, not just per-rule.
+            #
+            # `dispatch_to_user` writes the in-app row first and then attempts
+            # email, so a single bounced or suppressed address raised straight
+            # out of this loop and abandoned the whole rule — every remaining
+            # customer went untold because of one bad address, and the one who
+            # triggered it lost their in-app copy to the rollback as well.
+            # A live run against production data failed exactly this way.
+            try:
+                result = dispatch_to_user(
+                    db,
+                    user=user,
+                    title=title,
+                    body=body,
+                    category=NotificationCategory.service,
+                    channels=list(rule.channels or []),
+                    deep_link=config.get("deep_link", "/service/book"),
+                )
+            except Exception:  # noqa: BLE001 — one address must not stop the sweep
+                logger.exception(
+                    "reminder dispatch failed for user %s vehicle %s", user.id, vehicle.id
+                )
+                # Marked as sent regardless. The alternative is retrying a
+                # permanently dead address every night for the rest of the
+                # vehicle's life, which alerts nobody and fixes nothing; the
+                # failure itself is already recorded per channel.
+                db.add(
+                    ReminderDispatch(
+                        rule_id=rule.id,
+                        user_id=user.id,
+                        owned_vehicle_id=vehicle.id,
+                        milestone=milestone,
+                        stage=stage,
+                    )
+                )
+                continue
+            # Recorded even when a channel failed: the customer either has the
+            # in-app record or the delivery log has the failure, and re-sending
+            # the whole reminder tomorrow because SMS was down is worse than
+            # missing one channel.
+            db.add(
+                ReminderDispatch(
+                    rule_id=rule.id,
+                    user_id=user.id,
+                    owned_vehicle_id=vehicle.id,
+                    milestone=milestone,
+                    stage=stage,
+                )
             )
             notifications_created += int(result.in_app_created)
             emails_sent += int(result.email_sent)
@@ -184,15 +288,21 @@ def evaluate_rule(db: Session, rule_id: str) -> RuleEvaluateOut:
         title = config.get("title") or rule.name
         body = config.get("body") or "Check out the latest offers from Elizade Toyota."
         for user in users:
-            result = dispatch_to_user(
-                db,
-                user=user,
-                title=title,
-                body=body,
-                category=NotificationCategory.promo,
-                channels=list(rule.channels or []),
-                deep_link=config.get("deep_link"),
-            )
+            # Same per-recipient isolation as the service branch above: one
+            # suppressed address must not cancel a campaign to everyone else.
+            try:
+                result = dispatch_to_user(
+                    db,
+                    user=user,
+                    title=title,
+                    body=body,
+                    category=NotificationCategory.promo,
+                    channels=list(rule.channels or []),
+                    deep_link=config.get("deep_link"),
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("campaign dispatch failed for user %s", user.id)
+                continue
             notifications_created += int(result.in_app_created)
             emails_sent += int(result.email_sent)
             pushes_sent += int(result.push_sent)
@@ -342,7 +452,7 @@ def unread_count(db: Session, user_id: str) -> int:
     )
 
 
-def evaluate_due_rules(db: Session) -> dict:
+def evaluate_due_rules(db: Session, *, now: datetime | None = None) -> dict:
     """Run every active rule once. Intended for a scheduled caller.
 
     There is no in-process scheduler on purpose: a dealership's reminder volume
@@ -359,7 +469,7 @@ def evaluate_due_rules(db: Session) -> dict:
 
     for rule in rules:
         try:
-            result = evaluate_rule(db, rule.id)
+            result = evaluate_rule(db, rule.id, now=now)
             evaluated += 1
             notifications += getattr(result, "notificationsCreated", 0) or 0
         except HTTPException as exc:

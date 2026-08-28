@@ -28,6 +28,49 @@ class NotificationRule(Base):
     )
 
 
+class ReminderDispatch(Base):
+    """One row per reminder actually sent — the reason a cron can run daily.
+
+    WITHOUT THIS, `evaluate_rule` re-sent to every matching customer on every
+    run: the due-soon query has no lower bound, so a vehicle that is overdue
+    matches forever. A daily job would have told the same owner their service
+    was due every single day, indefinitely. That is not a reminder, it is a
+    reason to uninstall the app.
+
+    The uniqueness key is (rule, vehicle, milestone, stage):
+      * `milestone` is the `next_service_due` value the reminder was sent FOR,
+        so once the vehicle is serviced and the due date moves, the next cycle
+        is legitimately a new reminder rather than a suppressed duplicate;
+      * `stage` is the cadence step (30 / 7 / 1 / 0 days before), so the
+        customer gets each step once and only once.
+    """
+
+    __tablename__ = "reminder_dispatches"
+    __table_args__ = (
+        UniqueConstraint(
+            "rule_id",
+            "owned_vehicle_id",
+            "milestone",
+            "stage",
+            name="uq_reminder_dispatch_once",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    rule_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("notification_rules.id"), nullable=False, index=True
+    )
+    user_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=False, index=True)
+    owned_vehicle_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("owned_vehicles.id"), nullable=False, index=True
+    )
+    #: The service-due date this reminder was about.
+    milestone: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    #: Days-before bucket: 30, 7, 1, 0, or negative for an overdue nudge.
+    stage: Mapped[int] = mapped_column(Integer, nullable=False)
+    sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
 class BroadcastCampaign(Base):
     __tablename__ = "broadcast_campaigns"
 
