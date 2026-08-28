@@ -41,6 +41,10 @@ OPEN_STATUSES = (
     TicketStatus.waiting_customer,
 )
 
+#: Storage keys are `<uuid-hex>.<ext>`, and the extension must be one we
+#: deliberately serve. Declared ONCE: a second, permissive definition further
+#: down this file used to override this one, quietly turning the allowlist
+#: into "any five characters".
 _ATTACHMENT_KEY = re.compile(r"^[0-9a-f]{32}\.(jpg|png|webp|pdf|mp4|mov)$")
 
 
@@ -447,10 +451,6 @@ def get_customer_ticket(db: Session, user_id: str, ticket_id: str) -> CustomerTi
     return CustomerTicketDetailOut.from_model(_get_customer_ticket(db, user_id, ticket_id))
 
 
-#: Storage keys are `<uuid-hex>.<ext>` — nothing else is ours.
-_ATTACHMENT_KEY = re.compile(r"^[0-9a-f]{32}\.[a-z0-9]{1,5}$")
-
-
 def _attachment_url_prefixes() -> tuple[str, ...]:
     """Prefixes an attachment URL is allowed to start with.
 
@@ -509,6 +509,12 @@ def _validate_attachments(urls: list[str]) -> list[str]:
         key = url[len(prefix) :]
         if not _ATTACHMENT_KEY.match(key):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid attachment reference")
+        # THE LINE THAT WENT MISSING. Without it every URL was validated and
+        # then thrown away: the request succeeded, the customer saw their photo
+        # attached in the composer, and the message was stored with none.
+        # Silent data loss on a path whose whole job is carrying evidence.
+        if url not in cleaned:
+            cleaned.append(url)
     return cleaned
 
 
