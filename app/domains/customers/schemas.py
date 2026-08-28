@@ -275,3 +275,46 @@ class CustomerSegmentsOut(BaseModel):
     new: int = 0
     premium: int = 0
     atRisk: int = 0
+
+
+class DuplicateCustomerCandidateOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    customerId: str
+    duplicateCustomerId: str
+    customer: CustomerContact
+    duplicateCustomer: CustomerContact
+    matchFields: list[str]
+    confidence: int
+    status: str
+    reviewedById: str | None = None
+    reviewedAt: datetime | None = None
+    mergedIntoId: str | None = None
+    createdAt: datetime
+
+
+class DuplicateCustomerReviewIn(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    status: str = Field(pattern="^(pending|confirmed|dismissed|merged)$")
+
+
+class CustomerMergeIn(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    sourceCustomerId: str | None = Field(default=None, alias="sourceCustomerId")
+    targetCustomerId: str | None = Field(default=None, alias="targetCustomerId")
+    mergedCustomerId: str | None = Field(default=None, alias="mergedCustomerId")
+    survivingCustomerId: str | None = Field(default=None, alias="survivingCustomerId")
+    duplicateCustomerId: str | None = Field(default=None, alias="duplicateCustomerId")
+    keepCustomerId: str | None = Field(default=None, alias="keepCustomerId")
+
+
+class CustomerMergeOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    survivingCustomerId: str
+    mergedCustomerId: str
+    reassigned: dict[str, int]
+    auditId: str

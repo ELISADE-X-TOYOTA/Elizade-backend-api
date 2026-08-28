@@ -100,6 +100,9 @@ class User(Base):
 
     # Notifications
     notifications: Mapped[list["UserNotification"]] = relationship(back_populates="user")
+    availability_subscriptions: Mapped[list["VehicleAvailabilitySubscription"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
 
 
 class OtpChallenge(Base):

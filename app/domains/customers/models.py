@@ -2,11 +2,12 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+from app.domains.shared.enums import DuplicateReviewStatus
 
 
 class OwnedVehicle(Base):
@@ -78,3 +79,38 @@ class WatchlistItem(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     user: Mapped["User"] = relationship(back_populates="watchlist_items")
+
+
+class CustomerDuplicateReview(Base):
+    """Reviewable candidate pair produced by duplicate-customer detection."""
+
+    __tablename__ = "customer_duplicate_reviews"
+    __table_args__ = (
+        UniqueConstraint("customer_id", "duplicate_customer_id", name="uq_customer_duplicate_review_pair"),
+    )
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    customer_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=False, index=True)
+    duplicate_customer_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id"), nullable=False, index=True
+    )
+    match_fields: Mapped[list[str]] = mapped_column(JSONB, default=list, nullable=False)
+    confidence: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    status: Mapped[DuplicateReviewStatus] = mapped_column(
+        Enum(DuplicateReviewStatus, name="duplicate_review_status"),
+        default=DuplicateReviewStatus.pending,
+        nullable=False,
+        index=True,
+    )
+    reviewed_by_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    merged_into_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    customer: Mapped["User"] = relationship(foreign_keys=[customer_id])
+    duplicate_customer: Mapped["User"] = relationship(foreign_keys=[duplicate_customer_id])
+    reviewer: Mapped["User | None"] = relationship(foreign_keys=[reviewed_by_id])
+    merged_into: Mapped["User | None"] = relationship(foreign_keys=[merged_into_id])
