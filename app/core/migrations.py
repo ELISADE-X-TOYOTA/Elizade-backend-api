@@ -26,6 +26,7 @@ def run_startup_migrations(engine: Engine) -> None:
     _create_refresh_tokens(engine)
     _add_ticket_message_read_at(engine)
     _create_reminder_dispatches(engine)
+    _create_service_catalogue_tables(engine)
 
 
 def _add_lead_customer_tracking(engine: Engine) -> None:
@@ -182,3 +183,17 @@ def _create_reminder_dispatches(engine: Engine) -> None:
     from app.domains.notifications.models import ReminderDispatch  # noqa: PLC0415
 
     ReminderDispatch.__table__.create(bind=engine, checkfirst=True)
+
+
+def _create_service_catalogue_tables(engine: Engine) -> None:
+    """Service-item catalogue and structured history lines.
+
+    Additive only. Existing `service_history_items` rows are left untouched —
+    they simply have zero child lines until staff attach them. `create` with
+    `checkfirst` is a no-op on a fresh database where `create_all` already
+    built the tables.
+    """
+    from app.domains.service.models import ServiceHistoryLine, ServiceItem  # noqa: PLC0415
+
+    ServiceItem.__table__.create(bind=engine, checkfirst=True)
+    ServiceHistoryLine.__table__.create(bind=engine, checkfirst=True)

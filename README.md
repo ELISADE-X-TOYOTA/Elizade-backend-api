@@ -117,6 +117,10 @@ Note: `GET /vehicles` omits `engine` and the whole `specs` bag — only the deta
 endpoint returns them. Anything needing full specs (the mobile comparison
 screen) must fetch per-vehicle.
 
+Staff service (admin JWT) now also exposes a service-item catalogue and
+structured history line items. See `docs/service-board.md`. Customer history
+payloads omit line notes and amounts.
+
 ---
 
 ## File uploads
@@ -156,6 +160,10 @@ the field is an arbitrary-URL sink rendered by the staff console.
   comparison screen has little to differentiate. Real per-model specs needed.
 - `OwnedVehicleOut` omits `nextServiceDue` / `nextServiceMileage` even though
   the columns exist; the mobile garage derives them.
+- Service history parent rows are still free-text; structured line items exist
+  from Phase 1 of the Service Board work (`docs/service-board.md`) but are
+  optional. Historical rows stay unmapped on purpose. Prices and maintenance
+  intervals have not been supplied — do not invent them.
 - Uploads are stored on local disk. Fine for dev; needs object storage and an
   orphan-cleanup job for production (a file uploaded then abandoned is never
   collected).

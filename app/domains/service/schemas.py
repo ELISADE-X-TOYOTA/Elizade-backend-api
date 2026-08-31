@@ -3,7 +3,8 @@ from decimal import Decimal
 
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+import re
 
 
 def _full_name(user) -> str:
@@ -170,8 +171,24 @@ class AppointmentUpdateIn(BaseModel):
     estimated_completion: Annotated[datetime | None, Field(alias="estimatedCompletion")] = None
 
 
+class ServiceHistoryLineIn(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    service_item_id: str = Field(alias="serviceItemId")
+    operation: str
+    quantity: int | None = Field(default=None, ge=1)
+    amount: Decimal | None = Field(default=None, ge=0)
+    notes: str | None = Field(default=None, max_length=2000)
+
+
 class AppointmentStatusActionIn(BaseModel):
+    """Status change. `lines` and `mileage` are only valid with action=complete."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
     action: str  # confirm | start | complete | cancel
+    mileage: int | None = Field(default=None, ge=0)
+    lines: list[ServiceHistoryLineIn] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #
@@ -376,6 +393,49 @@ class CustomerServiceTrackOut(BaseModel):
     appointment: AppointmentDetailOut
     job: JobDetailOut | None = None
 
+
+class ServiceHistoryLineOut(BaseModel):
+    id: str
+    serviceItemId: str
+    serviceItemCode: str
+    serviceItemName: str
+    serviceItemGroup: str
+    operation: str
+    quantity: int | None = None
+    amount: Decimal | None = None
+    notes: str | None = None
+    source: str
+    isBackfilled: bool
+    backfillConfidence: int | None = None
+    createdAt: str
+
+    @staticmethod
+    def from_model(line) -> "ServiceHistoryLineOut":
+        item = line.service_item
+        return ServiceHistoryLineOut(
+            id=line.id,
+            serviceItemId=line.service_item_id,
+            serviceItemCode=item.code if item else "",
+            serviceItemName=item.name if item else "",
+            serviceItemGroup=item.group.value if item else "",
+            operation=line.operation.value,
+            quantity=line.quantity,
+            amount=line.amount,
+            notes=line.notes,
+            source=line.source.value,
+            isBackfilled=line.is_backfilled,
+            backfillConfidence=line.backfill_confidence,
+            createdAt=line.created_at.isoformat(),
+        )
+
+
+class ServiceHistoryLinesReplaceIn(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    lines: list[ServiceHistoryLineIn]
+    mileage: int | None = Field(default=None, ge=0)
+
+
 class ServiceHistoryItemOut(BaseModel):
     id: str
     ownedVehicleId: str
@@ -392,12 +452,14 @@ class ServiceHistoryItemOut(BaseModel):
     description: str
     cost: Decimal
     createdAt: str
+    lines: list[ServiceHistoryLineOut] = Field(default_factory=list)
 
     @staticmethod
     def from_model(item) -> "ServiceHistoryItemOut":
         vehicle = item.owned_vehicle
         customer = item.customer
         branch = item.branch
+        lines = sorted(item.lines or [], key=lambda row: row.created_at)
         return ServiceHistoryItemOut(
             id=item.id,
             ownedVehicleId=item.owned_vehicle_id,
@@ -414,6 +476,7 @@ class ServiceHistoryItemOut(BaseModel):
             description=item.description,
             cost=item.cost,
             createdAt=item.created_at.isoformat(),
+            lines=[ServiceHistoryLineOut.from_model(line) for line in lines],
         )
 
 
@@ -437,3 +500,61 @@ class ServiceHistoryCreateIn(BaseModel):
     mileage: int = Field(ge=0)
     description: str = Field(min_length=1)
     cost: Decimal = Field(default=Decimal("0"), ge=0)
+    lines: list[ServiceHistoryLineIn] = Field(default_factory=list)
+
+
+_ITEM_CODE_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+class ServiceItemOut(BaseModel):
+    id: str
+    code: str
+    name: str
+    group: str
+    description: str | None = None
+    sortOrder: int
+    isActive: bool
+    createdAt: str
+    updatedAt: str
+
+    @staticmethod
+    def from_model(item) -> "ServiceItemOut":
+        return ServiceItemOut(
+            id=item.id,
+            code=item.code,
+            name=item.name,
+            group=item.group.value,
+            description=item.description,
+            sortOrder=item.sort_order,
+            isActive=item.is_active,
+            createdAt=item.created_at.isoformat(),
+            updatedAt=item.updated_at.isoformat(),
+        )
+
+
+class ServiceItemCreateIn(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    code: str = Field(min_length=2, max_length=80)
+    name: str = Field(min_length=1, max_length=200)
+    group: str
+    description: str | None = Field(default=None, max_length=2000)
+    sort_order: Annotated[int, Field(alias="sortOrder", ge=0)] = 0
+
+    @field_validator("code")
+    @classmethod
+    def _normalize_code(cls, value: str) -> str:
+        code = value.strip().lower()
+        if not _ITEM_CODE_RE.fullmatch(code):
+            raise ValueError("Code must be lowercase letters, digits, and hyphens (e.g. engine-oil-filter)")
+        return code
+
+
+class ServiceItemUpdateIn(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    group: str | None = None
+    description: str | None = Field(default=None, max_length=2000)
+    sort_order: Annotated[int | None, Field(alias="sortOrder", ge=0)] = None
+    is_active: Annotated[bool | None, Field(alias="isActive")] = None

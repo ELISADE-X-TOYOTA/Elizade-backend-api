@@ -118,6 +118,18 @@ def test_building_the_app_emits_no_alias_warnings():
             {"document_urls": ["/media/documents/extra.pdf"]},
             id="ownership-documents-append",
         ),
+        pytest.param(
+            "app.domains.service.schemas:ServiceHistoryLineIn",
+            {"serviceItemId": "item-1", "operation": "serviced"},
+            {"service_item_id": "item-1", "operation": "serviced"},
+            id="service-history-line",
+        ),
+        pytest.param(
+            "app.domains.service.schemas:ServiceItemUpdateIn",
+            {"sortOrder": 4, "isActive": False},
+            {"sort_order": 4, "is_active": False},
+            id="service-item-patch",
+        ),
     ],
 )
 def test_camelcase_payloads_bind(factory, payload, checks):

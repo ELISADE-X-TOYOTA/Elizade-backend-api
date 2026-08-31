@@ -2,7 +2,19 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text, func
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -10,7 +22,10 @@ from app.core.database import Base
 from app.domains.shared.enums import (
     AdditionalWorkStatus,
     AppointmentStatus,
+    ServiceHistoryLineSource,
+    ServiceItemGroup,
     ServiceJobStatus,
+    ServiceOperation,
     ServiceType,
 )
 
@@ -180,3 +195,76 @@ class ServiceHistoryItem(Base):
     owned_vehicle: Mapped["OwnedVehicle"] = relationship(back_populates="service_history")
     customer: Mapped["User"] = relationship(back_populates="service_history")
     branch: Mapped["Branch"] = relationship(foreign_keys=[branch_id])
+    lines: Mapped[list["ServiceHistoryLine"]] = relationship(
+        back_populates="history_item",
+        cascade="all, delete-orphan",
+        order_by="ServiceHistoryLine.created_at",
+    )
+
+
+class ServiceItem(Base):
+    """Canonical service-item catalogue. Prices and intervals are added later."""
+
+    __tablename__ = "service_items"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    code: Mapped[str] = mapped_column(String(80), unique=True, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    group: Mapped[ServiceItemGroup] = mapped_column(
+        Enum(ServiceItemGroup, name="service_item_group"), nullable=False, index=True
+    )
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    lines: Mapped[list["ServiceHistoryLine"]] = relationship(back_populates="service_item")
+
+
+class ServiceHistoryLine(Base):
+    """One catalogue item covered on a completed visit.
+
+    Date and odometer live on the parent `service_history_items` row. Do not
+    duplicate them here — a line is not a separate event.
+    """
+
+    __tablename__ = "service_history_lines"
+    __table_args__ = (
+        UniqueConstraint("history_item_id", "service_item_id", name="uq_service_history_line_item"),
+        CheckConstraint("quantity IS NULL OR quantity >= 1", name="ck_service_history_line_quantity"),
+        CheckConstraint("amount IS NULL OR amount >= 0", name="ck_service_history_line_amount"),
+        CheckConstraint(
+            "backfill_confidence IS NULL OR (backfill_confidence >= 0 AND backfill_confidence <= 100)",
+            name="ck_service_history_line_confidence",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    history_item_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("service_history_items.id"), nullable=False, index=True
+    )
+    service_item_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("service_items.id"), nullable=False, index=True
+    )
+    operation: Mapped[ServiceOperation] = mapped_column(
+        Enum(ServiceOperation, name="service_operation"), nullable=False
+    )
+    quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[ServiceHistoryLineSource] = mapped_column(
+        Enum(ServiceHistoryLineSource, name="service_history_line_source"),
+        default=ServiceHistoryLineSource.manual_entry,
+        nullable=False,
+    )
+    is_backfilled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    backfill_confidence: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_by_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    history_item: Mapped["ServiceHistoryItem"] = relationship(back_populates="lines")
+    service_item: Mapped["ServiceItem"] = relationship(back_populates="lines")
+    created_by: Mapped["User | None"] = relationship(foreign_keys=[created_by_id])
