@@ -4,8 +4,8 @@ Staff-facing digital service price book, per-vehicle maintenance status, and
 customer call list. This document is the feature record: what already exists,
 what Phase 1 changed, and what is still blocked.
 
-The **Service Board frontend** (`Elizade-service-board`) is a **separate public
-display application** — no login. It reads published prices and the active
+The **Service Board frontend** ([`Elizade-dashboard`](https://github.com/ELISADE-X-TOYOTA/Elizade-dashboard))
+is a **separate public display application** — no login. It reads published prices and the active
 catalogue via `/api/v1/service-board/*` (unauthenticated). Staff workflows
 (import, intervals, call lists, unmapped history) remain on
 `/api/v1/admin/service/*` behind JWT in the existing admin portal.
