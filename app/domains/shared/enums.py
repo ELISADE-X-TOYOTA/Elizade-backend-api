@@ -77,6 +77,25 @@ class ServicePriceBookStatus(str, enum.Enum):
     archived = "archived"
 
 
+class ServiceMaintenanceStatus(str, enum.Enum):
+    """Per-item maintenance state shown on the Service Board."""
+
+    current = "current"
+    due_soon = "due_soon"
+    overdue = "overdue"
+    not_on_record = "not_on_record"
+    no_interval = "no_interval"
+
+
+class ServiceIntervalKind(str, enum.Enum):
+    """How an item's interval is interpreted by the status engine."""
+
+    scheduled = "scheduled"
+    inspection = "inspection"
+    condition = "condition"
+    repair_only = "repair_only"
+
+
 class TicketCategory(str, enum.Enum):
     sales = "sales"
     service = "service"

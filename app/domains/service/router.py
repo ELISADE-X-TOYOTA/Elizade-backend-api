@@ -5,6 +5,7 @@ from app.core.database import get_db
 from app.core.deps import CurrentAdmin, StaffPortalUser
 from app.domains.service import service
 from app.domains.service import price_book_service
+from app.domains.service import maintenance_service
 from app.domains.service.schemas import (
     AdditionalWorkCreateIn,
     AdditionalWorkStatusUpdateIn,
@@ -34,6 +35,15 @@ from app.domains.service.price_book_schemas import (
     PriceImportPreviewOut,
     PriceImportPublishOut,
     PricePublishIn,
+)
+from app.domains.service.maintenance_schemas import (
+    BoardSettingsOut,
+    BoardSettingsUpdateIn,
+    PaginatedMaintenanceSummaryOut,
+    ServiceIntervalCreateIn,
+    ServiceIntervalOut,
+    ServiceIntervalUpdateIn,
+    VehicleMaintenanceOut,
 )
 
 router = APIRouter(prefix="/admin/service", tags=["admin-service"])
@@ -326,3 +336,91 @@ def publish_price_import(
         effective_from = datetime.fromisoformat(effectiveFrom.replace("Z", "+00:00"))
     payload = PricePublishIn(effectiveFrom=effective_from, disclaimer=disclaimer)
     return price_book_service.publish_price_import(db, file, payload, actor=current_user)
+
+
+# --------------------------------------------------------------------------- #
+# Maintenance status (Phase 3)                                                #
+# --------------------------------------------------------------------------- #
+
+@router.get("/maintenance/settings", response_model=BoardSettingsOut)
+def get_maintenance_settings(_: StaffPortalUser, db: Session = Depends(get_db)) -> BoardSettingsOut:
+    return maintenance_service.get_settings(db)
+
+
+@router.put("/maintenance/settings", response_model=BoardSettingsOut)
+def update_maintenance_settings(
+    payload: BoardSettingsUpdateIn,
+    current_user: CurrentAdmin,
+    db: Session = Depends(get_db),
+) -> BoardSettingsOut:
+    return maintenance_service.update_settings(db, payload, actor=current_user)
+
+
+@router.get("/maintenance/intervals", response_model=list[ServiceIntervalOut])
+def list_maintenance_intervals(
+    _: StaffPortalUser,
+    db: Session = Depends(get_db),
+    serviceItemId: str | None = Query(default=None),
+) -> list[ServiceIntervalOut]:
+    return maintenance_service.list_intervals(db, service_item_id=serviceItemId)
+
+
+@router.post("/maintenance/intervals", response_model=ServiceIntervalOut, status_code=status.HTTP_201_CREATED)
+def create_maintenance_interval(
+    payload: ServiceIntervalCreateIn,
+    _: CurrentAdmin,
+    db: Session = Depends(get_db),
+) -> ServiceIntervalOut:
+    return maintenance_service.create_interval(db, payload)
+
+
+@router.patch("/maintenance/intervals/{interval_id}", response_model=ServiceIntervalOut)
+def update_maintenance_interval(
+    interval_id: str,
+    payload: ServiceIntervalUpdateIn,
+    _: CurrentAdmin,
+    db: Session = Depends(get_db),
+) -> ServiceIntervalOut:
+    return maintenance_service.update_interval(db, interval_id, payload)
+
+
+@router.get("/maintenance/due-soon", response_model=PaginatedMaintenanceSummaryOut)
+def list_due_soon_vehicles(
+    _: StaffPortalUser,
+    db: Session = Depends(get_db),
+    model: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=20, ge=1, le=100),
+) -> PaginatedMaintenanceSummaryOut:
+    return maintenance_service.list_due_soon(db, model=model, page=page, size=size)
+
+
+@router.get("/maintenance/overdue", response_model=PaginatedMaintenanceSummaryOut)
+def list_overdue_vehicles(
+    _: StaffPortalUser,
+    db: Session = Depends(get_db),
+    model: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=20, ge=1, le=100),
+) -> PaginatedMaintenanceSummaryOut:
+    return maintenance_service.list_overdue(db, model=model, page=page, size=size)
+
+
+@router.get("/maintenance/call-list", response_model=PaginatedMaintenanceSummaryOut)
+def list_call_list(
+    _: StaffPortalUser,
+    db: Session = Depends(get_db),
+    model: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=20, ge=1, le=100),
+) -> PaginatedMaintenanceSummaryOut:
+    return maintenance_service.list_call_list(db, model=model, page=page, size=size)
+
+
+@router.get("/maintenance/vehicles/{owned_vehicle_id}", response_model=VehicleMaintenanceOut)
+def get_vehicle_maintenance(
+    owned_vehicle_id: str,
+    _: StaffPortalUser,
+    db: Session = Depends(get_db),
+) -> VehicleMaintenanceOut:
+    return maintenance_service.get_vehicle_maintenance(db, owned_vehicle_id)

@@ -28,6 +28,8 @@ from app.domains.shared.enums import (
     ServiceOperation,
     ServicePriceBookStatus,
     ServiceType,
+    ServiceMaintenanceStatus,
+    ServiceIntervalKind,
 )
 
 
@@ -349,3 +351,66 @@ class ServicePriceBookEntry(Base):
     version: Mapped["ServicePriceBookVersion"] = relationship(back_populates="entries")
     service_item: Mapped["ServiceItem"] = relationship()
     vehicle_model: Mapped["ServiceBoardVehicleModel"] = relationship()
+
+
+# --------------------------------------------------------------------------- #
+# Service Board maintenance status (Phase 3)                                  #
+# --------------------------------------------------------------------------- #
+
+class ServiceBoardSettings(Base):
+    """Global due-soon thresholds and mileage freshness rules (singleton row)."""
+
+    __tablename__ = "service_board_settings"
+    __table_args__ = (
+        CheckConstraint("due_soon_km >= 0", name="ck_service_board_settings_due_soon_km"),
+        CheckConstraint("due_soon_days >= 0", name="ck_service_board_settings_due_soon_days"),
+        CheckConstraint("mileage_stale_days >= 1", name="ck_service_board_settings_stale_days"),
+    )
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    due_soon_km: Mapped[int] = mapped_column(Integer, default=500, nullable=False)
+    due_soon_days: Mapped[int] = mapped_column(Integer, default=30, nullable=False)
+    mileage_stale_days: Mapped[int] = mapped_column(Integer, default=180, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    updated_by_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=True)
+
+
+class ServiceInterval(Base):
+    """Admin-configured maintenance interval for a catalogue item (optionally per board model)."""
+
+    __tablename__ = "service_intervals"
+    __table_args__ = (
+        UniqueConstraint("service_item_id", "vehicle_model_id", name="uq_service_interval_item_model"),
+        CheckConstraint(
+            "interval_km IS NULL OR interval_km > 0",
+            name="ck_service_interval_km",
+        ),
+        CheckConstraint(
+            "interval_months IS NULL OR interval_months > 0",
+            name="ck_service_interval_months",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    service_item_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("service_items.id"), nullable=False, index=True
+    )
+    #: Null = applies to every board model unless a model-specific row exists.
+    vehicle_model_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("service_board_vehicle_models.id"), nullable=True, index=True
+    )
+    kind: Mapped[ServiceIntervalKind] = mapped_column(
+        Enum(ServiceIntervalKind, name="service_interval_kind"), nullable=False
+    )
+    interval_km: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    interval_months: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    service_item: Mapped["ServiceItem"] = relationship()
+    vehicle_model: Mapped["ServiceBoardVehicleModel | None"] = relationship()

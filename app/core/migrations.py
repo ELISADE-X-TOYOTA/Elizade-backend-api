@@ -28,6 +28,7 @@ def run_startup_migrations(engine: Engine) -> None:
     _create_reminder_dispatches(engine)
     _create_service_catalogue_tables(engine)
     _create_service_price_book_tables(engine)
+    _create_service_maintenance_tables(engine)
 
 
 def _add_lead_customer_tracking(engine: Engine) -> None:
@@ -210,3 +211,13 @@ def _create_service_price_book_tables(engine: Engine) -> None:
     ServiceBoardVehicleModel.__table__.create(bind=engine, checkfirst=True)
     ServicePriceBookVersion.__table__.create(bind=engine, checkfirst=True)
     ServicePriceBookEntry.__table__.create(bind=engine, checkfirst=True)
+
+
+def _create_service_maintenance_tables(engine: Engine) -> None:
+    from app.domains.service.models import (  # noqa: PLC0415
+        ServiceBoardSettings,
+        ServiceInterval,
+    )
+
+    ServiceBoardSettings.__table__.create(bind=engine, checkfirst=True)
+    ServiceInterval.__table__.create(bind=engine, checkfirst=True)

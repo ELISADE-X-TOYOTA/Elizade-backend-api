@@ -498,4 +498,27 @@ service-item management, unmapped history queue with line attach.
 
 Run locally: `npm run dev` on port **5174** (proxies `/api` → `:8000`).
 
-Still not implemented: Phase 3 status engine, call list, interval admin.
+Still not implemented: bulk interval import, customer notifications from call list.
+
+---
+
+## Phase 3 status
+
+Implemented in this API:
+
+- Pure status engine (`app/domains/service/status.py`) with injected clock
+- `service_board_settings` — due-soon km/days and mileage staleness thresholds
+- `service_intervals` — admin-configured per item (optional per board model)
+- Status values: `current`, `due_soon`, `overdue`, `not_on_record`, `no_interval`
+- Missing history never returns `current`; inspections ≠ replacements for scheduled items
+- Staff endpoints under `/api/v1/admin/service/maintenance/`:
+  - `GET/PUT /settings` (read staff / write admin)
+  - `GET/POST/PATCH /intervals`
+  - `GET /due-soon`, `/overdue`, `/call-list`
+  - `GET /vehicles/{ownedVehicleId}` — per-item matrix
+
+**No production intervals are seeded.** Elizade must configure intervals via admin API or Service Board UI before queues populate.
+
+**Tests:** `tests/test_service_status.py` (pure boundary cases), `tests/test_service_maintenance.py` (HTTP integration).
+
+**Frontend:** Due soon, overdue, call list, interval admin, vehicle detail pages added to `Elizade-service-board`.
