@@ -44,6 +44,58 @@ class AdditionalWorkStatus(str, enum.Enum):
     rejected = "rejected"
 
 
+class ServiceItemGroup(str, enum.Enum):
+    """Price-board grouping. Distinct from appointment-level ServiceType."""
+
+    periodic = "periodic"
+    chassis = "chassis"
+    engine = "engine"
+
+
+class ServiceOperation(str, enum.Enum):
+    """What was actually done to a catalogue item on a visit.
+
+    An inspection is never a replacement. Status engines must not treat
+    `inspected` as evidence that the part was serviced, repaired, or replaced.
+    """
+
+    inspected = "inspected"
+    serviced = "serviced"
+    repaired = "repaired"
+    replaced = "replaced"
+
+
+class ServiceHistoryLineSource(str, enum.Enum):
+    job_completion = "job_completion"
+    manual_entry = "manual_entry"
+    backfill = "backfill"
+
+
+class ServicePriceBookStatus(str, enum.Enum):
+    draft = "draft"
+    published = "published"
+    archived = "archived"
+
+
+class ServiceMaintenanceStatus(str, enum.Enum):
+    """Per-item maintenance state shown on the Service Board."""
+
+    current = "current"
+    due_soon = "due_soon"
+    overdue = "overdue"
+    not_on_record = "not_on_record"
+    no_interval = "no_interval"
+
+
+class ServiceIntervalKind(str, enum.Enum):
+    """How an item's interval is interpreted by the status engine."""
+
+    scheduled = "scheduled"
+    inspection = "inspection"
+    condition = "condition"
+    repair_only = "repair_only"
+
+
 class TicketCategory(str, enum.Enum):
     sales = "sales"
     service = "service"

@@ -3,9 +3,10 @@ from decimal import Decimal
 from math import ceil
 
 from fastapi import HTTPException, UploadFile, status
-from sqlalchemy import func
+from sqlalchemy import exists, func
 from sqlalchemy.orm import Session, joinedload, selectinload
 
+from app.domains.audit.models import AuditLog
 from app.domains.branches.models import Branch
 from app.domains.customers.models import OwnedVehicle
 from app.domains.ownership import service as ownership_service
@@ -15,8 +16,10 @@ from app.domains.service.models import (
     ServiceAppointment,
     ServiceBay,
     ServiceHistoryItem,
+    ServiceHistoryLine,
     ServiceInvoice,
     ServiceInvoiceLineItem,
+    ServiceItem,
     ServiceJob,
     ServiceJobStage,
 )
@@ -41,14 +44,23 @@ from app.domains.service.schemas import (
     ServiceBayUpdateIn,
     ServiceHistoryCreateIn,
     ServiceHistoryItemOut,
+    ServiceHistoryLineIn,
+    ServiceHistoryLinesReplaceIn,
+    ServiceItemCreateIn,
+    ServiceItemOut,
+    ServiceItemUpdateIn,
     ServiceStatsOut,
     StageUpdateIn,
 )
 from app.domains.shared.enums import (
     AdditionalWorkStatus,
     AppointmentStatus,
+    AuditAction,
     BranchType,
+    ServiceHistoryLineSource,
+    ServiceItemGroup,
     ServiceJobStatus,
+    ServiceOperation,
     ServiceType,
 )
 from app.domains.shared.documents import normalize_document_urls
@@ -153,6 +165,96 @@ def update_bay(db: Session, bay_id: str, payload: ServiceBayUpdateIn) -> Service
     db.commit()
     db.refresh(bay)
     return ServiceBayOut.from_model(bay)
+
+
+# --------------------------------------------------------------------------- #
+# Service-item catalogue                                                      #
+# --------------------------------------------------------------------------- #
+
+def _parse_item_group(value: str) -> ServiceItemGroup:
+    try:
+        return ServiceItemGroup(value.strip().lower())
+    except ValueError as exc:
+        allowed = ", ".join(g.value for g in ServiceItemGroup)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid group. Allowed: {allowed}",
+        ) from exc
+
+
+def list_items(
+    db: Session, *, group: str | None = None, is_active: bool | None = None
+) -> list[ServiceItemOut]:
+    query = db.query(ServiceItem).order_by(ServiceItem.sort_order.asc(), ServiceItem.name.asc())
+    if group:
+        query = query.filter(ServiceItem.group == _parse_item_group(group))
+    if is_active is not None:
+        query = query.filter(ServiceItem.is_active.is_(is_active))
+    return [ServiceItemOut.from_model(row) for row in query.all()]
+
+
+def create_item(db: Session, payload: ServiceItemCreateIn, *, actor_id: str) -> ServiceItemOut:
+    existing = db.query(ServiceItem).filter(ServiceItem.code == payload.code).one_or_none()
+    if existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A service item with that code already exists")
+    item = ServiceItem(
+        code=payload.code,
+        name=payload.name.strip(),
+        group=_parse_item_group(payload.group),
+        description=payload.description.strip() if payload.description else None,
+        sort_order=payload.sort_order,
+        is_active=True,
+    )
+    db.add(item)
+    db.flush()
+    db.add(
+        AuditLog(
+            actor_id=actor_id,
+            action=AuditAction.create,
+            entity_type="service_item",
+            entity_id=item.id,
+            changes={"code": item.code, "name": item.name, "group": item.group.value},
+        )
+    )
+    db.commit()
+    db.refresh(item)
+    return ServiceItemOut.from_model(item)
+
+
+def update_item(db: Session, item_id: str, payload: ServiceItemUpdateIn, *, actor_id: str) -> ServiceItemOut:
+    item = db.get(ServiceItem, item_id)
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service item not found")
+    data = payload.model_dump(exclude_unset=True)
+    changes: dict = {}
+    if "name" in data and data["name"] is not None:
+        item.name = data["name"].strip()
+        changes["name"] = item.name
+    if "group" in data and data["group"] is not None:
+        item.group = _parse_item_group(data["group"])
+        changes["group"] = item.group.value
+    if "description" in data:
+        item.description = data["description"].strip() if data["description"] else None
+        changes["description"] = item.description
+    if "sort_order" in data and data["sort_order"] is not None:
+        item.sort_order = data["sort_order"]
+        changes["sortOrder"] = item.sort_order
+    if "is_active" in data and data["is_active"] is not None:
+        item.is_active = data["is_active"]
+        changes["isActive"] = item.is_active
+    if changes:
+        db.add(
+            AuditLog(
+                actor_id=actor_id,
+                action=AuditAction.update,
+                entity_type="service_item",
+                entity_id=item.id,
+                changes=changes,
+            )
+        )
+    db.commit()
+    db.refresh(item)
+    return ServiceItemOut.from_model(item)
 
 
 # --------------------------------------------------------------------------- #
@@ -289,7 +391,11 @@ _STATUS_TRANSITIONS = {
 
 
 def change_appointment_status(
-    db: Session, appointment_id: str, payload: AppointmentStatusActionIn
+    db: Session,
+    appointment_id: str,
+    payload: AppointmentStatusActionIn,
+    *,
+    actor: User | None = None,
 ) -> AppointmentDetailOut:
     appt = _get_appointment(db, appointment_id)
     action = payload.action.strip().lower()
@@ -303,6 +409,11 @@ def change_appointment_status(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Cannot {action} an appointment with status '{appt.status.value}'",
         )
+    if action != "complete" and (payload.lines or payload.mileage is not None):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Lines and mileage can only be supplied when completing a service",
+        )
 
     now = datetime.now(timezone.utc)
     if action == "confirm":
@@ -312,7 +423,14 @@ def change_appointment_status(
         _start_job(db, appt, now)
     elif action == "complete":
         appt.status = AppointmentStatus.completed
-        _complete_job(db, appt, now)
+        _complete_job(
+            db,
+            appt,
+            now,
+            lines=payload.lines,
+            mileage=payload.mileage,
+            actor_id=actor.id if actor else None,
+        )
     elif action == "cancel":
         appt.status = AppointmentStatus.cancelled
         if appt.job and appt.job.status not in (ServiceJobStatus.completed, ServiceJobStatus.cancelled):
@@ -368,7 +486,15 @@ def _start_job(db: Session, appt: ServiceAppointment, now: datetime) -> None:
         db.add(ServiceJobStage(job_id=job.id, label=label, sort_order=index, completed=False))
 
 
-def _complete_job(db: Session, appt: ServiceAppointment, now: datetime) -> None:
+def _complete_job(
+    db: Session,
+    appt: ServiceAppointment,
+    now: datetime,
+    *,
+    lines: list[ServiceHistoryLineIn] | None = None,
+    mileage: int | None = None,
+    actor_id: str | None = None,
+) -> None:
     job = appt.job
     invoice_total = Decimal("0")
 
@@ -393,18 +519,28 @@ def _complete_job(db: Session, appt: ServiceAppointment, now: datetime) -> None:
                 )
             invoice_total = subtotal
 
-    db.add(
-        ServiceHistoryItem(
-            owned_vehicle_id=appt.owned_vehicle_id,
-            user_id=appt.user_id,
-            appointment_id=appt.id,
-            branch_id=appt.branch_id,
-            service_type=appt.service_type.value,
-            performed_at=now,
-            mileage=appt.mileage_at_booking,
-            description=appt.issue_description,
-            cost=invoice_total,
-        )
+    recorded_mileage = appt.mileage_at_booking if mileage is None else mileage
+    _raise_vehicle_mileage(appt.owned_vehicle, recorded_mileage)
+
+    history = ServiceHistoryItem(
+        owned_vehicle_id=appt.owned_vehicle_id,
+        user_id=appt.user_id,
+        appointment_id=appt.id,
+        branch_id=appt.branch_id,
+        service_type=appt.service_type.value,
+        performed_at=now,
+        mileage=recorded_mileage,
+        description=appt.issue_description,
+        cost=invoice_total,
+    )
+    db.add(history)
+    db.flush()
+    _add_history_lines(
+        db,
+        history_id=history.id,
+        payloads=lines or [],
+        source=ServiceHistoryLineSource.job_completion,
+        actor_id=actor_id,
     )
 
 
@@ -699,7 +835,11 @@ def list_customer_history(
         )
         if not owned:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found")
-    return list_history(db, customer_id=customer_id, owned_vehicle_id=owned_vehicle_id, page=page, size=size)
+    result = list_history(db, customer_id=customer_id, owned_vehicle_id=owned_vehicle_id, page=page, size=size)
+    # Staff line notes/amounts stay off the customer contract.
+    for item in result.items:
+        item.lines = []
+    return result
 
 
 def get_customer_service_track(db: Session, customer_id: str, appointment_id: str) -> CustomerServiceTrackOut:
@@ -743,11 +883,86 @@ def customer_respond_additional_work(
 # Service history                                                             #
 # --------------------------------------------------------------------------- #
 
+def _parse_operation(value: str) -> ServiceOperation:
+    try:
+        return ServiceOperation(value.strip().lower())
+    except ValueError as exc:
+        allowed = ", ".join(op.value for op in ServiceOperation)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid operation. Allowed: {allowed}",
+        ) from exc
+
+
+def _raise_vehicle_mileage(vehicle: OwnedVehicle | None, mileage: int) -> None:
+    """Raise the latest-known odometer. Never decrease it from a service write."""
+    if vehicle is None:
+        return
+    if mileage > vehicle.mileage:
+        vehicle.mileage = mileage
+
+
+def _add_history_lines(
+    db: Session,
+    *,
+    history_id: str,
+    payloads: list[ServiceHistoryLineIn],
+    source: ServiceHistoryLineSource,
+    actor_id: str | None,
+) -> None:
+    if not payloads:
+        return
+    item_ids = [row.service_item_id for row in payloads]
+    if len(item_ids) != len(set(item_ids)):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Duplicate service items in the same record",
+        )
+
+    rows = db.query(ServiceItem).filter(ServiceItem.id.in_(item_ids)).all()
+    found = {row.id: row for row in rows}
+    missing = [item_id for item_id in item_ids if item_id not in found]
+    if missing:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Service item not found")
+    inactive = [item_id for item_id, row in found.items() if not row.is_active]
+    if inactive:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Service item is inactive")
+
+    for payload in payloads:
+        notes = payload.notes.strip() if payload.notes else None
+        db.add(
+            ServiceHistoryLine(
+                history_item_id=history_id,
+                service_item_id=payload.service_item_id,
+                operation=_parse_operation(payload.operation),
+                quantity=payload.quantity,
+                amount=payload.amount,
+                notes=notes or None,
+                source=source,
+                is_backfilled=False,
+                backfill_confidence=None,
+                created_by_id=actor_id,
+            )
+        )
+
+
 _HISTORY_LOADS = (
     joinedload(ServiceHistoryItem.owned_vehicle),
     joinedload(ServiceHistoryItem.customer),
     joinedload(ServiceHistoryItem.branch),
+    selectinload(ServiceHistoryItem.lines).joinedload(ServiceHistoryLine.service_item),
 )
+
+
+def _history_item_query(db: Session):
+    return db.query(ServiceHistoryItem).options(*_HISTORY_LOADS)
+
+
+def _get_history_item(db: Session, history_id: str) -> ServiceHistoryItem:
+    item = _history_item_query(db).filter(ServiceHistoryItem.id == history_id).one_or_none()
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="History record not found")
+    return item
 
 
 def list_history(
@@ -755,18 +970,17 @@ def list_history(
     *,
     customer_id: str | None = None,
     owned_vehicle_id: str | None = None,
+    unmapped_only: bool = False,
     page: int = 1,
     size: int = 20,
 ) -> PaginatedHistoryOut:
-    query = (
-        db.query(ServiceHistoryItem)
-        .options(*_HISTORY_LOADS)
-        .order_by(ServiceHistoryItem.performed_at.desc())
-    )
+    query = _history_item_query(db).order_by(ServiceHistoryItem.performed_at.desc())
     if customer_id:
         query = query.filter(ServiceHistoryItem.user_id == customer_id)
     if owned_vehicle_id:
         query = query.filter(ServiceHistoryItem.owned_vehicle_id == owned_vehicle_id)
+    if unmapped_only:
+        query = query.filter(~exists().where(ServiceHistoryLine.history_item_id == ServiceHistoryItem.id))
 
     total = query.count()
     rows = query.offset((page - 1) * size).limit(size).all()
@@ -781,12 +995,20 @@ def list_history(
     )
 
 
-def create_history(db: Session, payload: ServiceHistoryCreateIn) -> ServiceHistoryItemOut:
+def get_history(db: Session, history_id: str) -> ServiceHistoryItemOut:
+    return ServiceHistoryItemOut.from_model(_get_history_item(db, history_id))
+
+
+def create_history(
+    db: Session, payload: ServiceHistoryCreateIn, *, actor: User | None = None
+) -> ServiceHistoryItemOut:
     vehicle = db.get(OwnedVehicle, payload.owned_vehicle_id)
     if not vehicle:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Vehicle not found")
     if db.get(Branch, payload.branch_id) is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Branch not found")
+
+    _raise_vehicle_mileage(vehicle, payload.mileage)
 
     item = ServiceHistoryItem(
         owned_vehicle_id=vehicle.id,
@@ -800,9 +1022,52 @@ def create_history(db: Session, payload: ServiceHistoryCreateIn) -> ServiceHisto
         cost=payload.cost,
     )
     db.add(item)
+    db.flush()
+    _add_history_lines(
+        db,
+        history_id=item.id,
+        payloads=payload.lines,
+        source=ServiceHistoryLineSource.manual_entry,
+        actor_id=actor.id if actor else None,
+    )
     db.commit()
-    db.refresh(item)
-    return ServiceHistoryItemOut.from_model(item)
+    return get_history(db, item.id)
+
+
+def replace_history_lines(
+    db: Session,
+    history_id: str,
+    payload: ServiceHistoryLinesReplaceIn,
+    *,
+    actor: User,
+) -> ServiceHistoryItemOut:
+    item = _get_history_item(db, history_id)
+    if payload.mileage is not None:
+        item.mileage = payload.mileage
+        _raise_vehicle_mileage(item.owned_vehicle, payload.mileage)
+
+    for line in list(item.lines):
+        db.delete(line)
+    db.flush()
+
+    _add_history_lines(
+        db,
+        history_id=item.id,
+        payloads=payload.lines,
+        source=ServiceHistoryLineSource.manual_entry,
+        actor_id=actor.id,
+    )
+    db.add(
+        AuditLog(
+            actor_id=actor.id,
+            action=AuditAction.update,
+            entity_type="service_history_item",
+            entity_id=item.id,
+            changes={"lineCount": len(payload.lines), "mileage": item.mileage},
+        )
+    )
+    db.commit()
+    return get_history(db, item.id)
 
 
 def delete_history(db: Session, history_id: str) -> None:

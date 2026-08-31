@@ -162,3 +162,232 @@ def test_completing_appointment_appears_in_history(client, staff_headers, appoin
     body = client.get(URL, headers=staff_headers).json()
     assert body["total"] == 1
     assert body["items"][0]["appointmentId"] == appt.id
+    assert body["items"][0]["lines"] == []
+
+
+# --------------------------------------------------------------------------- #
+# Structured lines                                                             #
+# --------------------------------------------------------------------------- #
+
+ITEMS = "/api/v1/admin/service/items"
+CUSTOMER_HISTORY = "/api/v1/service/history"
+
+
+def _create_item(client, admin_headers, **overrides) -> dict:
+    body = {
+        "code": "engine-oil-filter",
+        "name": "Engine oil and filter",
+        "group": "periodic",
+    }
+    body.update(overrides)
+    resp = client.post(ITEMS, json=body, headers=admin_headers)
+    assert resp.status_code == 201
+    return resp.json()
+
+
+def test_create_with_lines(client, staff_headers, admin_headers, owned_vehicle_factory, branch):
+    item = _create_item(client, admin_headers)
+    vehicle = owned_vehicle_factory(mileage=15000)
+    resp = client.post(
+        URL,
+        json=_entry(
+            vehicle,
+            branch,
+            lines=[
+                {
+                    "serviceItemId": item["id"],
+                    "operation": "serviced",
+                    "quantity": 1,
+                    "amount": 25000,
+                    "notes": "5W-30",
+                }
+            ],
+        ),
+        headers=staff_headers,
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert len(body["lines"]) == 1
+    line = body["lines"][0]
+    assert line["serviceItemCode"] == "engine-oil-filter"
+    assert line["operation"] == "serviced"
+    assert line["quantity"] == 1
+    assert line["amount"] == "25000.00"
+    assert line["notes"] == "5W-30"
+    assert line["source"] == "manual_entry"
+    assert line["isBackfilled"] is False
+
+
+def test_create_duplicate_item_rejected(client, staff_headers, admin_headers, owned_vehicle_factory, branch):
+    item = _create_item(client, admin_headers)
+    vehicle = owned_vehicle_factory()
+    line = {"serviceItemId": item["id"], "operation": "inspected"}
+    resp = client.post(
+        URL,
+        json=_entry(vehicle, branch, lines=[line, {**line, "operation": "replaced"}]),
+        headers=staff_headers,
+    )
+    assert resp.status_code == 400
+
+
+def test_create_unknown_item_rejected(client, staff_headers, owned_vehicle_factory, branch):
+    vehicle = owned_vehicle_factory()
+    resp = client.post(
+        URL,
+        json=_entry(
+            vehicle,
+            branch,
+            lines=[{"serviceItemId": "00000000-0000-0000-0000-000000000000", "operation": "serviced"}],
+        ),
+        headers=staff_headers,
+    )
+    assert resp.status_code == 400
+
+
+def test_create_inactive_item_rejected(client, staff_headers, admin_headers, owned_vehicle_factory, branch):
+    item = _create_item(client, admin_headers)
+    client.patch(f"{ITEMS}/{item['id']}", json={"isActive": False}, headers=admin_headers)
+    vehicle = owned_vehicle_factory()
+    resp = client.post(
+        URL,
+        json=_entry(vehicle, branch, lines=[{"serviceItemId": item["id"], "operation": "serviced"}]),
+        headers=staff_headers,
+    )
+    assert resp.status_code == 400
+
+
+def test_create_invalid_operation_rejected(client, staff_headers, admin_headers, owned_vehicle_factory, branch):
+    item = _create_item(client, admin_headers)
+    vehicle = owned_vehicle_factory()
+    resp = client.post(
+        URL,
+        json=_entry(vehicle, branch, lines=[{"serviceItemId": item["id"], "operation": "checked"}]),
+        headers=staff_headers,
+    )
+    assert resp.status_code == 400
+
+
+def test_get_history_detail(client, staff_headers, owned_vehicle_factory, branch):
+    vehicle = owned_vehicle_factory()
+    created = client.post(URL, json=_entry(vehicle, branch), headers=staff_headers).json()
+    resp = client.get(f"{URL}/{created['id']}", headers=staff_headers)
+    assert resp.status_code == 200
+    assert resp.json()["id"] == created["id"]
+    assert resp.json()["lines"] == []
+
+
+def test_unmapped_filter(client, staff_headers, admin_headers, owned_vehicle_factory, branch):
+    item = _create_item(client, admin_headers)
+    mapped_vehicle = owned_vehicle_factory(registration_number="MAP-001")
+    unmapped_vehicle = owned_vehicle_factory(registration_number="UNM-002", vin="JTDB1234567890002")
+    client.post(
+        URL,
+        json=_entry(mapped_vehicle, branch, lines=[{"serviceItemId": item["id"], "operation": "replaced"}]),
+        headers=staff_headers,
+    )
+    unmapped = client.post(URL, json=_entry(unmapped_vehicle, branch), headers=staff_headers).json()
+
+    body = client.get(URL, params={"unmappedOnly": True}, headers=staff_headers).json()
+    assert body["total"] == 1
+    assert body["items"][0]["id"] == unmapped["id"]
+    assert body["items"][0]["lines"] == []
+
+
+def test_replace_lines_and_raise_mileage(
+    client, staff_headers, admin_headers, owned_vehicle_factory, branch, db_session
+):
+    oil = _create_item(client, admin_headers)
+    pads = _create_item(client, admin_headers, code="brake-pads", name="Brake pads", group="chassis")
+    vehicle = owned_vehicle_factory(mileage=20000)
+    history_id = client.post(URL, json=_entry(vehicle, branch, mileage=20000), headers=staff_headers).json()["id"]
+
+    resp = client.put(
+        f"{URL}/{history_id}/lines",
+        json={
+            "mileage": 21500,
+            "lines": [
+                {"serviceItemId": oil["id"], "operation": "serviced"},
+                {"serviceItemId": pads["id"], "operation": "inspected"},
+            ],
+        },
+        headers=staff_headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["mileage"] == 21500
+    assert {line["operation"] for line in body["lines"]} == {"serviced", "inspected"}
+    assert {line["serviceItemCode"] for line in body["lines"]} == {"engine-oil-filter", "brake-pads"}
+
+    db_session.refresh(vehicle)
+    assert vehicle.mileage == 21500
+
+    # Replacing with an empty set unmaps the record; odometer never decreases.
+    cleared = client.put(f"{URL}/{history_id}/lines", json={"lines": [], "mileage": 10000}, headers=staff_headers)
+    assert cleared.status_code == 200
+    assert cleared.json()["lines"] == []
+    assert cleared.json()["mileage"] == 10000
+    db_session.refresh(vehicle)
+    assert vehicle.mileage == 21500
+
+
+def test_complete_with_lines_records_operation_and_mileage(
+    client, staff_headers, admin_headers, appointment_factory, db_session
+):
+    item = _create_item(client, admin_headers)
+    appt = appointment_factory(status=AppointmentStatus.confirmed)
+    client.patch(f"{APPT_URL}/{appt.id}/status", json={"action": "start"}, headers=staff_headers)
+    resp = client.patch(
+        f"{APPT_URL}/{appt.id}/status",
+        json={
+            "action": "complete",
+            "mileage": 16000,
+            "lines": [{"serviceItemId": item["id"], "operation": "replaced", "notes": "OEM filter"}],
+        },
+        headers=staff_headers,
+    )
+    assert resp.status_code == 200
+
+    body = client.get(URL, headers=staff_headers).json()
+    assert body["total"] == 1
+    record = body["items"][0]
+    assert record["appointmentId"] == appt.id
+    assert record["mileage"] == 16000
+    assert record["description"] == "Periodic maintenance"
+    assert len(record["lines"]) == 1
+    assert record["lines"][0]["operation"] == "replaced"
+    assert record["lines"][0]["source"] == "job_completion"
+    assert record["lines"][0]["notes"] == "OEM filter"
+
+    db_session.refresh(appt.owned_vehicle)
+    assert appt.owned_vehicle.mileage == 16000
+
+
+def test_lines_rejected_on_confirm(client, staff_headers, admin_headers, appointment_factory):
+    item = _create_item(client, admin_headers)
+    appt = appointment_factory(status=AppointmentStatus.requested)
+    resp = client.patch(
+        f"{APPT_URL}/{appt.id}/status",
+        json={"action": "confirm", "lines": [{"serviceItemId": item["id"], "operation": "serviced"}]},
+        headers=staff_headers,
+    )
+    assert resp.status_code == 400
+
+
+def test_customer_history_omits_line_notes(
+    client, staff_headers, admin_headers, customer_headers, owned_vehicle_factory, branch
+):
+    item = _create_item(client, admin_headers)
+    vehicle = owned_vehicle_factory()
+    client.post(
+        URL,
+        json=_entry(
+            vehicle,
+            branch,
+            lines=[{"serviceItemId": item["id"], "operation": "serviced", "notes": "internal tech note"}],
+        ),
+        headers=staff_headers,
+    )
+    body = client.get(CUSTOMER_HISTORY, headers=customer_headers).json()
+    assert body["total"] == 1
+    assert body["items"][0]["description"] == "Oil change and inspection"
+    assert body["items"][0]["lines"] == []
