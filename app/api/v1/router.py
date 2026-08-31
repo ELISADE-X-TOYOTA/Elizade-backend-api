@@ -19,6 +19,7 @@ from app.domains.ownership.customer_router import router as ownership_customer_r
 from app.domains.sales.customer_router import router as sales_customer_router
 from app.domains.service.customer_router import router as service_customer_router
 from app.domains.service.router import router as service_router
+from app.domains.service.board_public_router import router as service_board_public_router
 from app.domains.staff.router import router as staff_router
 from app.domains.support.customer_router import router as support_customer_router
 from app.domains.support.router import router as support_router
@@ -50,6 +51,7 @@ api_router.include_router(warranty_customer_router)
 api_router.include_router(warranty_router)
 api_router.include_router(realtime_ticket_router)
 api_router.include_router(analytics_router)
+api_router.include_router(service_board_public_router)
 api_router.include_router(service_router)
 api_router.include_router(leads_customer_router)
 api_router.include_router(sales_customer_router)

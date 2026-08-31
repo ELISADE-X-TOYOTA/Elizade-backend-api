@@ -4,10 +4,11 @@ Staff-facing digital service price book, per-vehicle maintenance status, and
 customer call list. This document is the feature record: what already exists,
 what Phase 1 changed, and what is still blocked.
 
-The dashboard frontend is a **separate application in a separate repository**.
-It is not part of this API repo, the customer mobile app, or the existing
-admin portal (`elizade-web.vercel.app`). That admin portal is not in this
-workspace and is not modified here.
+The **Service Board frontend** (`Elizade-service-board`) is a **separate public
+display application** — no login. It reads published prices and the active
+catalogue via `/api/v1/service-board/*` (unauthenticated). Staff workflows
+(import, intervals, call lists, unmapped history) remain on
+`/api/v1/admin/service/*` behind JWT in the existing admin portal.
 
 ---
 
