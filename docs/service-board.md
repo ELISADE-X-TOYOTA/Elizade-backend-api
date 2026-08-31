@@ -450,5 +450,52 @@ spec.
 Implemented in this API: catalogue, structured lines, optional completion
 payload, post-hoc line attach, unmapped listing, dry-run report.
 
-Not implemented: dashboard frontend repo, price book, status engine, call
-list, admin-portal UI, mobile changes, bulk text-to-item mapping.
+Not implemented: status engine, call list, admin-portal UI, mobile changes,
+bulk text-to-item mapping.
+
+---
+
+## Phase 2 status
+
+Implemented in this API:
+
+- `service_board_vehicle_models` — canonical board model names (seeded when empty)
+- `service_price_book_versions` — draft / published / archived versioning
+- `service_price_book_entries` — price per item × model × mileage band (0 = any)
+- CSV import with preview (row-level errors, duplicate-cell detection)
+- Transactional publish (archives previous published version, writes `AuditLog`)
+- Staff read APIs for published board matrix and version history
+- Admin-only import template download, preview, and publish
+
+**New files**
+
+- `app/domains/service/price_book_constants.py`
+- `app/domains/service/price_book_schemas.py`
+- `app/domains/service/price_book_service.py`
+- `tests/test_service_price_book.py`
+
+**Routes** (all under `/api/v1/admin/service/price-book/`)
+
+| Method | Path | Auth |
+|---|---|---|
+| GET | `/board` | Staff — published matrix |
+| GET | `/models` | Staff — board vehicle models |
+| GET | `/mileage-bands` | Staff — allowed km bands |
+| GET | `/versions` | Staff — version list |
+| GET | `/versions/{id}` | Staff — version + entries |
+| GET | `/import/template` | Admin — CSV template download |
+| POST | `/import/preview` | Admin — validate upload |
+| POST | `/import/publish` | Admin — publish new version |
+
+CSV columns: `vehicleModel`, `serviceItemCode`, `mileageBandKm`, `price`.
+No production prices are seeded.
+
+**Dashboard frontend**
+
+Repo: `Elizade-service-board` (sibling of this API). Vite + React + TS.
+Staff OTP login, overview, price book matrix, CSV import/publish (admin),
+service-item management, unmapped history queue with line attach.
+
+Run locally: `npm run dev` on port **5174** (proxies `/api` → `:8000`).
+
+Still not implemented: Phase 3 status engine, call list, interval admin.

@@ -26,6 +26,7 @@ from app.domains.shared.enums import (
     ServiceItemGroup,
     ServiceJobStatus,
     ServiceOperation,
+    ServicePriceBookStatus,
     ServiceType,
 )
 
@@ -268,3 +269,83 @@ class ServiceHistoryLine(Base):
     history_item: Mapped["ServiceHistoryItem"] = relationship(back_populates="lines")
     service_item: Mapped["ServiceItem"] = relationship(back_populates="lines")
     created_by: Mapped["User | None"] = relationship(foreign_keys=[created_by_id])
+
+
+# --------------------------------------------------------------------------- #
+# Service Board price book (Phase 2)                                          #
+# --------------------------------------------------------------------------- #
+
+class ServiceBoardVehicleModel(Base):
+    """Supported vehicle model names on the physical / digital price board."""
+
+    __tablename__ = "service_board_vehicle_models"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class ServicePriceBookVersion(Base):
+    """Versioned price matrix. Only one `published` row should be current."""
+
+    __tablename__ = "service_price_book_versions"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    status: Mapped[ServicePriceBookStatus] = mapped_column(
+        Enum(ServicePriceBookStatus, name="service_price_book_status"),
+        nullable=False,
+        index=True,
+    )
+    currency: Mapped[str] = mapped_column(String(3), default="NGN", nullable=False)
+    price_inclusive: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    effective_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    disclaimer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    published_by_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=True)
+    created_by_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    entries: Mapped[list["ServicePriceBookEntry"]] = relationship(
+        back_populates="version", cascade="all, delete-orphan"
+    )
+    published_by: Mapped["User | None"] = relationship(foreign_keys=[published_by_id])
+    created_by: Mapped["User | None"] = relationship(foreign_keys=[created_by_id])
+
+
+class ServicePriceBookEntry(Base):
+    """One price cell: item × vehicle model × optional mileage band within a version."""
+
+    __tablename__ = "service_price_book_entries"
+    __table_args__ = (
+        UniqueConstraint(
+            "version_id",
+            "service_item_id",
+            "vehicle_model_id",
+            "mileage_band_km",
+            name="uq_service_price_book_entry_cell",
+        ),
+        CheckConstraint("price >= 0", name="ck_service_price_book_entry_price"),
+        CheckConstraint("mileage_band_km >= 0", name="ck_service_price_book_entry_mileage"),
+    )
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    version_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("service_price_book_versions.id"), nullable=False, index=True
+    )
+    service_item_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("service_items.id"), nullable=False, index=True
+    )
+    vehicle_model_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("service_board_vehicle_models.id"), nullable=False, index=True
+    )
+    #: 0 = not mileage-banded (chassis / engine flat cells). Periodic rows use approved band values.
+    mileage_band_km: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    price: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    version: Mapped["ServicePriceBookVersion"] = relationship(back_populates="entries")
+    service_item: Mapped["ServiceItem"] = relationship()
+    vehicle_model: Mapped["ServiceBoardVehicleModel"] = relationship()

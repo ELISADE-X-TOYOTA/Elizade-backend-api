@@ -1,9 +1,10 @@
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import CurrentAdmin, StaffPortalUser
 from app.domains.service import service
+from app.domains.service import price_book_service
 from app.domains.service.schemas import (
     AdditionalWorkCreateIn,
     AdditionalWorkStatusUpdateIn,
@@ -24,6 +25,15 @@ from app.domains.service.schemas import (
     ServiceItemUpdateIn,
     ServiceStatsOut,
     StageUpdateIn,
+)
+from app.domains.service.price_book_schemas import (
+    BoardVehicleModelOut,
+    PriceBookBoardOut,
+    PriceBookDetailOut,
+    PriceBookVersionOut,
+    PriceImportPreviewOut,
+    PriceImportPublishOut,
+    PricePublishIn,
 )
 
 router = APIRouter(prefix="/admin/service", tags=["admin-service"])
@@ -247,3 +257,72 @@ def update_bay(
     db: Session = Depends(get_db),
 ) -> ServiceBayOut:
     return service.update_bay(db, bay_id, payload)
+
+
+# --------------------------------------------------------------------------- #
+# Price book (Phase 2)                                                        #
+# --------------------------------------------------------------------------- #
+
+@router.get("/price-book/board", response_model=PriceBookBoardOut)
+def get_published_price_board(_: StaffPortalUser, db: Session = Depends(get_db)) -> PriceBookBoardOut:
+    return price_book_service.get_published_board(db)
+
+
+@router.get("/price-book/models", response_model=list[BoardVehicleModelOut])
+def list_board_models(_: StaffPortalUser, db: Session = Depends(get_db)) -> list[BoardVehicleModelOut]:
+    return price_book_service.list_board_models(db)
+
+
+@router.get("/price-book/mileage-bands", response_model=list[int])
+def list_mileage_bands(_: StaffPortalUser) -> list[int]:
+    return price_book_service.list_mileage_bands()
+
+
+@router.get("/price-book/versions", response_model=list[PriceBookVersionOut])
+def list_price_book_versions(_: StaffPortalUser, db: Session = Depends(get_db)) -> list[PriceBookVersionOut]:
+    return price_book_service.list_versions(db)
+
+
+@router.get("/price-book/versions/{version_id}", response_model=PriceBookDetailOut)
+def get_price_book_version(
+    version_id: str,
+    _: StaffPortalUser,
+    db: Session = Depends(get_db),
+) -> PriceBookDetailOut:
+    return price_book_service.get_version(db, version_id)
+
+
+@router.get("/price-book/import/template")
+def price_import_template(_: CurrentAdmin, db: Session = Depends(get_db)) -> Response:
+    content = price_book_service.import_template_csv(db)
+    return Response(
+        content=content,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="elizade-service-price-import-template.csv"'},
+    )
+
+
+@router.post("/price-book/import/preview", response_model=PriceImportPreviewOut)
+def preview_price_import(
+    _: CurrentAdmin,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> PriceImportPreviewOut:
+    return price_book_service.preview_price_import(db, file)
+
+
+@router.post("/price-book/import/publish", response_model=PriceImportPublishOut)
+def publish_price_import(
+    current_user: CurrentAdmin,
+    file: UploadFile = File(...),
+    effectiveFrom: str | None = Form(default=None),
+    disclaimer: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+) -> PriceImportPublishOut:
+    from datetime import datetime
+
+    effective_from = None
+    if effectiveFrom:
+        effective_from = datetime.fromisoformat(effectiveFrom.replace("Z", "+00:00"))
+    payload = PricePublishIn(effectiveFrom=effective_from, disclaimer=disclaimer)
+    return price_book_service.publish_price_import(db, file, payload, actor=current_user)

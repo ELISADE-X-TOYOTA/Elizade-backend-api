@@ -71,6 +71,12 @@ class ServiceHistoryLineSource(str, enum.Enum):
     backfill = "backfill"
 
 
+class ServicePriceBookStatus(str, enum.Enum):
+    draft = "draft"
+    published = "published"
+    archived = "archived"
+
+
 class TicketCategory(str, enum.Enum):
     sales = "sales"
     service = "service"

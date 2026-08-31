@@ -29,6 +29,7 @@ from app.domains.service.models import (
     AdditionalWorkRequest,
     ServiceAppointment,
     ServiceBay,
+    ServiceBoardVehicleModel,
     ServiceHistoryItem,
     ServiceHistoryLine,
     ServiceInvoice,
@@ -36,6 +37,8 @@ from app.domains.service.models import (
     ServiceItem,
     ServiceJob,
     ServiceJobStage,
+    ServicePriceBookEntry,
+    ServicePriceBookVersion,
 )
 from app.domains.support.models import SlaConfig, SupportTicket, TicketMessage
 from app.domains.users.models import OtpChallenge, RefreshToken, User
@@ -60,9 +63,12 @@ __all__ = [
     "Reservation",
     "ServiceAppointment",
     "ServiceBay",
+    "ServiceBoardVehicleModel",
     "ServiceHistoryItem",
     "ServiceHistoryLine",
     "ServiceItem",
+    "ServicePriceBookEntry",
+    "ServicePriceBookVersion",
     "ServiceInvoice",
     "ServiceInvoiceLineItem",
     "ServiceJob",
