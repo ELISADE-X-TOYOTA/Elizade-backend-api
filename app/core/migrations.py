@@ -29,6 +29,7 @@ def run_startup_migrations(engine: Engine) -> None:
     _create_service_catalogue_tables(engine)
     _create_service_price_book_tables(engine)
     _create_service_maintenance_tables(engine)
+    _add_service_appointment_attachments(engine)
 
 
 def _add_lead_customer_tracking(engine: Engine) -> None:
@@ -70,6 +71,36 @@ def _create_notification_tables(engine: Engine) -> None:
 
     for model in (NotificationDelivery, DeviceToken, NotificationPreference):
         model.__table__.create(bind=engine, checkfirst=True)
+
+
+def _add_service_appointment_attachments(engine: Engine) -> None:
+    """Photos a customer attaches when booking a service.
+
+    THE COLUMN WAS ADDED TO THE MODEL WITHOUT A MIGRATION. `create_all()` only
+    creates missing TABLES, never missing columns, so production kept a
+    `service_appointments` table with no `attachment_urls` while the ORM
+    selected it on every query — including the plain list. The result was that
+    `GET /service/appointments` returned 500 for every customer, and the app
+    showed "Elizade services are temporarily unavailable" on the Service tab.
+
+    Backfilled to '[]' and set NOT NULL to match the model, which types it
+    `Mapped[list]` and passes it to `list(...)` unconditionally.
+    """
+    inspector = inspect(engine)
+    if not inspector.has_table("service_appointments"):
+        return
+    columns = {col["name"] for col in inspector.get_columns("service_appointments")}
+    if "attachment_urls" in columns:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE service_appointments ADD COLUMN attachment_urls JSONB"))
+        conn.execute(
+            text("UPDATE service_appointments SET attachment_urls = '[]'::jsonb WHERE attachment_urls IS NULL")
+        )
+        conn.execute(
+            text("ALTER TABLE service_appointments ALTER COLUMN attachment_urls SET DEFAULT '[]'::jsonb")
+        )
+        conn.execute(text("ALTER TABLE service_appointments ALTER COLUMN attachment_urls SET NOT NULL"))
 
 
 def _add_ticket_message_attachments(engine: Engine) -> None:

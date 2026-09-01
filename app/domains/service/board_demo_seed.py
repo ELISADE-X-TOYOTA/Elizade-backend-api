@@ -27,17 +27,34 @@ from app.domains.shared.enums import AuditAction, ServiceItemGroup, ServicePrice
 from app.domains.users.models import User, UserRole
 
 # (code, display name, group, sort_order, base_price_ngn at reference band / flat price)
+#
+# Sized to the showroom wall board — sixteen rows across its three sections — so
+# the preview shows the layout at the density it will actually run at. Five rows
+# do not fill nine mileage columns convincingly; sixteen reveal how the sections
+# stack and where the board starts to need scrolling on a 1080p screen.
+#
+# THE NAMES ARE REPRESENTATIVE, NOT TRANSCRIBED. They are the common Toyota
+# service menu, not a reading of Elizade's board, and the prices are generated
+# by `_demo_price` rather than quoted. Elizade's board appears to abbreviate
+# ("Brake Pad Repl", "Timing Belt Repl"); swap these for the real rows before
+# anyone treats a screenshot of this as a price list.
 DEMO_CATALOGUE: tuple[tuple[str, str, ServiceItemGroup, int, int], ...] = (
     ("engine-oil-filter", "Engine oil and filter", ServiceItemGroup.periodic, 1, 28_000),
     ("air-filter", "Air filter", ServiceItemGroup.periodic, 2, 12_000),
     ("fuel-filter", "Fuel filter", ServiceItemGroup.periodic, 3, 15_000),
     ("spark-plugs", "Spark plugs", ServiceItemGroup.periodic, 4, 35_000),
     ("cabin-filter", "Cabin air filter", ServiceItemGroup.periodic, 5, 10_000),
+    ("coolant", "Coolant replacement", ServiceItemGroup.periodic, 6, 26_000),
+    ("transmission-fluid", "Automatic transmission fluid", ServiceItemGroup.periodic, 7, 58_000),
     ("brake-pads-front", "Brake pads (front)", ServiceItemGroup.chassis, 10, 48_000),
-    ("brake-fluid", "Brake fluid replacement", ServiceItemGroup.chassis, 11, 18_000),
-    ("wheel-alignment", "Wheel alignment", ServiceItemGroup.chassis, 12, 22_000),
+    ("brake-pads-rear", "Brake pads (rear)", ServiceItemGroup.chassis, 11, 44_000),
+    ("brake-fluid", "Brake fluid replacement", ServiceItemGroup.chassis, 12, 18_000),
+    ("wheel-alignment", "Wheel alignment", ServiceItemGroup.chassis, 13, 22_000),
+    ("shock-absorbers", "Shock absorber replacement", ServiceItemGroup.chassis, 14, 96_000),
     ("timing-belt", "Timing belt kit", ServiceItemGroup.engine, 20, 125_000),
     ("drive-belt", "Drive belt", ServiceItemGroup.engine, 21, 32_000),
+    ("radiator", "Radiator replacement", ServiceItemGroup.engine, 22, 148_000),
+    ("clutch-kit", "Clutch kit replacement", ServiceItemGroup.engine, 23, 210_000),
 )
 
 
