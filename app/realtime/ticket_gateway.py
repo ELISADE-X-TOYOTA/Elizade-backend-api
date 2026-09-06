@@ -56,7 +56,11 @@ def _may_access(db: Session, user: User, ticket_id: str) -> SupportTicket | None
 
     if user.role in (UserRole.admin, UserRole.staff):
         return ticket
-    if ticket.customer_id == user.id:
+    # `user_id` is the owner column. `customer_id` does not exist on the model
+    # — only the `customer` RELATIONSHIP does — so this raised AttributeError
+    # for every customer, and the socket closed 1011 before it ever opened.
+    # Staff returned above and so never reached it, which is why it survived.
+    if ticket.user_id == user.id:
         return ticket
     return None
 
@@ -75,10 +79,20 @@ async def ticket_socket(
         override applies to sockets too — without it the socket reads a
         different connection than the rest of the request path and cannot see
         data written in an open transaction;
-      * a SQLAlchemy Session releases its pool connection on commit, so an
-        idle socket between frames holds nothing. Holding the session for the
-        socket's lifetime therefore does not pin a database connection per
-        open chat.
+      * a SQLAlchemy Session releases its pool connection on commit OR
+        ROLLBACK, so an idle socket between frames holds nothing.
+
+    THAT SECOND POINT WAS TRUE IN PRINCIPLE AND FALSE IN PRACTICE, and it cost
+    an outage. A read opens a transaction just as a write does, and the reads
+    below — authenticate, then the access check — were never closed out. The
+    session sat `idle in transaction`, pinning one pool connection for the
+    entire life of the socket. Against `pool_size=5 + max_overflow=10`, fifteen
+    open chats exhausted a worker and every unrelated request then waited out
+    the 30-second `pool_timeout` and returned 500 — including login.
+
+    So the transaction is explicitly ended wherever this handler is about to
+    wait on the network: once before `accept`, and again after each frame. The
+    session object survives; the connection underneath it does not.
     """
     connection: Connection | None = None
 
@@ -95,23 +109,36 @@ async def ticket_socket(
             await websocket.close(code=_CLOSE_POLICY)
             return
 
-        await websocket.accept()
-
+        # Copy what the socket needs off the ORM objects BEFORE ending the
+        # transaction. A rollback expires them, so a later attribute access
+        # would silently issue a refresh and open a fresh transaction — the
+        # very thing being avoided.
         role = "staff" if user.role in (UserRole.admin, UserRole.staff) else "customer"
-        connection = Connection(socket=websocket, user_id=user.id, role=role)
+        user_id = user.id
+        status_value = ticket.status.value
+        db.rollback()
+
+        await websocket.accept()
+        connection = Connection(socket=websocket, user_id=user_id, role=role)
         room = ticket_room(ticket_id)
         await hub.join(connection, room)
 
         await websocket.send_json(
             events.envelope(
                 events.JOINED,
-                {"ticketId": ticket_id, "role": role, "status": ticket.status.value},
+                {"ticketId": ticket_id, "role": role, "status": status_value},
             )
         )
 
         while True:
+            # Blocks here — for minutes, or for as long as the chat stays open.
             frame = await websocket.receive_json()
-            await _handle(db, websocket, connection, ticket_id, frame, user, role)
+            try:
+                await _handle(db, websocket, connection, ticket_id, frame, user, role)
+            finally:
+                # Whatever the handler did — committed, raised, or only read —
+                # the connection goes back to the pool before the next wait.
+                db.rollback()
 
     except WebSocketDisconnect:
         pass  # the ordinary way a socket ends
