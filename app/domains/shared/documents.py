@@ -31,6 +31,28 @@ _CONTENT_TYPE_TO_EXTENSION = {
 }
 _ALLOWED_EXTENSIONS = frozenset(_CONTENT_TYPE_TO_EXTENSION.values())
 
+#: A FLAT storage filename — a stem with no dots or separators, then one safe
+#: extension. Used with `fullmatch`, so nothing may precede or follow it, and
+#: the charset admits no `/`, `\` or `.` in the stem. That is what stops
+#: `../../etc/passwd` and every variation on it.
+#:
+#: WAS MISSING ENTIRELY. `normalize_document_urls` referenced this name without
+#: it ever being defined, so every ownership claim submitted WITH documents
+#: died on `NameError` — a 500 on the main path of the feature. It failed
+#: closed, so nothing unsafe was accepted, but nothing valid was either.
+#:
+#: Deliberately NOT pinned to the `uuid4().hex` form that `LocalStorage.save`
+#: currently emits. This validates a key the client hands back, and coupling it
+#: to today's key-generation scheme would silently invalidate every stored file
+#: the day that scheme changes. The shape is the security property; the exact
+#: stem is not.
+#:
+#: The extension set is the one STORAGE can produce, deliberately wider than
+#: this module's `_ALLOWED_EXTENSIONS`: support attachments include mp4/mov,
+#: and rejecting a key here that the system itself wrote would be a second bug
+#: wearing the first one's clothes.
+_SAFE_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,99}\.(?:jpg|jpeg|png|webp|pdf|mp4|mov)")
+
 
 class UnsupportedUploadExtension(ValueError):
     """Raised when an upload's type cannot be mapped to a safe file extension."""

@@ -9,10 +9,13 @@ from fastapi.responses import FileResponse
 from app.core.config import get_settings
 from app.core.database import Base, engine, SessionLocal
 from app.core.deps import CurrentUser
+from app.core.errors import REQUEST_ID_HEADER, install_error_handlers
+from app.core.middleware import RequestContextMiddleware
 from app.core.migrations import run_startup_migrations
 from app.core.seed import seed_all
 from app.domains.registry import *  # noqa: F403 — register all ORM models before routers
 from app.domains.ownership.storage import storage
+from app.realtime import fanout
 from app.api.v1.router import api_router
 
 settings = get_settings()
@@ -27,7 +30,14 @@ async def lifespan(_: FastAPI):
         seed_all(db)
     finally:
         db.close()
-    yield
+
+    # Cross-replica realtime. A no-op unless REDIS_URL is set, so the
+    # single-replica path gains nothing to fail.
+    await fanout.fanout.start()
+    try:
+        yield
+    finally:
+        await fanout.fanout.stop()
 
 
 app = FastAPI(
@@ -35,6 +45,14 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+install_error_handlers(app)
+
+# Added BEFORE CORSMiddleware, which means it runs OUTSIDE it: Starlette applies
+# middleware in reverse registration order, so this wraps CORS and therefore
+# times and tags the CORS preflight too. It also guarantees a request id exists
+# before any handler — including the error handlers — can look for one.
+app.add_middleware(RequestContextMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
@@ -44,6 +62,10 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Without this the browser hides X-Request-ID from JS, so the dashboard
+    # could never quote the id when reporting an error. `allow_headers` governs
+    # the REQUEST direction and does not cover it.
+    expose_headers=[REQUEST_ID_HEADER],
 )
 
 app.include_router(api_router)

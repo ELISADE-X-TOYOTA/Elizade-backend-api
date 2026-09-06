@@ -16,6 +16,28 @@ class Settings(BaseSettings):
     otp_length: int = 6
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,https://elizade-web.vercel.app"
 
+    # ── Capacity ─────────────────────────────────────────────────────────
+    # Connections this deployment may hold on the database IN TOTAL, across
+    # every worker of every replica. Sized to leave headroom under the managed
+    # instance's 25-connection cap for psql, migrations and monitoring.
+    #
+    # These three are what make scaling out a config change rather than a
+    # redesign — see the arithmetic in `core/database.py`. Set them to match
+    # reality: `replica_count` too LOW is the dangerous direction, because it
+    # over-allocates connections and the failure appears under load rather
+    # than at deploy.
+    db_connection_budget: int = 20
+    #: uvicorn worker processes per container (the Dockerfile passes this on).
+    web_concurrency: int = 1
+    #: Containers running this image. Railway does not expose a replica count
+    #: to the process, so it cannot be detected — it has to be declared.
+    replica_count: int = 1
+
+    #: Redis, for cross-replica realtime fan-out and shared rate-limit
+    #: counters. Empty -> in-process implementations, which are correct for a
+    #: single replica and WRONG for more than one. See `realtime/hub.py`.
+    redis_url: str = ""
+
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_username: str = ""
