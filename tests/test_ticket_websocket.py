@@ -82,7 +82,10 @@ def test_a_customer_cannot_open_someone_elses_ticket(
 
     other = User(
         email="intruder@example.com",
-        phone="+2348030000999",
+        # The model has no `phone` — it stores the normalised and display forms
+        # separately, and the declarative constructor rejects unknown kwargs.
+        phone_normalized="+2348030000999",
+        phone_display="0803 000 0999",
         first_name="Not",
         last_name="Yours",
         role=UserRole.customer,

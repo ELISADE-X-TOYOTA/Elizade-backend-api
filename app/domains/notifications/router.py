@@ -1,13 +1,15 @@
 import asyncio
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db
+from app.core.database import SessionLocal, get_db
 from app.core.deps import CustomerUser
+from app.core.security import decode_access_token
 from app.domains.notifications import preferences, service
+from app.domains.users.models import User, UserRole
 from app.domains.notifications.models import DeviceToken
 from app.domains.notifications.schemas import (
     DeviceTokenIn,
@@ -115,8 +117,49 @@ def unread_count(current_user: CustomerUser, db: Session = Depends(get_db)) -> U
     return UnreadCountOut(unread=service.unread_count(db, current_user.id))
 
 
+#: Seconds between unread-count polls on an open stream.
+#
+#: Was 1. At one query per second per connected phone this was the heaviest
+#: single source of load on the database, for a number that changes a few times
+#: a day. Five seconds is still immediate to a customer and cuts the query rate
+#: by 80%.
+STREAM_POLL_SECONDS = 5
+#: ~10 minutes, after which the client reconnects transparently.
+STREAM_POLLS = 120
+
+
+def authenticate_stream_user(db: Session, authorization: str | None) -> User:
+    """`require_customer` by hand, against a session the caller owns.
+
+    The dependency version cannot be used here: FastAPI would hold its session
+    open for the life of the stream, which is the leak this endpoint exists to
+    avoid. The rules and the status codes are deliberately identical to
+    `get_current_user` + `require_customer` so a client cannot tell the two
+    paths apart.
+    """
+    scheme, _, credentials = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not credentials:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+
+    user_id = decode_access_token(credentials)
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token"
+        )
+
+    user = db.get(User, user_id)
+    if not user or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive"
+        )
+    if user.role != UserRole.customer:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Customer access only")
+
+    return user
+
+
 @router.get("/stream")
-async def stream(current_user: CustomerUser, db: Session = Depends(get_db)) -> StreamingResponse:
+async def stream(request: Request) -> StreamingResponse:
     """Server-Sent Events: nudges a connected client to refresh.
 
     SSE rather than a WebSocket because this traffic only ever goes one way.
@@ -126,21 +169,61 @@ async def stream(current_user: CustomerUser, db: Session = Depends(get_db)) -> S
     The payload is deliberately thin — just the unread count. A fat event can
     race the database write and show a toast for a notification the list does
     not yet contain; the client refetches instead.
+
+    WHY THIS ENDPOINT TAKES NO `Depends(get_db)` AND NO AUTH DEPENDENCY
+    ===================================================================
+    THIS OUTAGE. FastAPI holds a request's dependencies open until the RESPONSE
+    is finished, and a streaming response is not finished until the stream ends.
+    So `Depends(get_db)` on a ten-minute stream pinned a database connection for
+    ten minutes — and the auth dependency, which takes `get_db` of its own,
+    pinned a second one.
+
+    Two connections per connected phone, against a pool of
+    `pool_size=5 + max_overflow=10`. Seven testers with the app open consumed
+    every connection a worker had; every other request then waited out
+    SQLAlchemy's 30-second `pool_timeout` and returned 500. That is precisely
+    what testers saw as "the request timed out" on the login screen, on every
+    network, at the same moment.
+
+    So the session is opened per poll and closed immediately, and the customer
+    is authenticated by hand against a session that is likewise released at
+    once. Between polls this endpoint holds NO connection at all.
     """
-    user_id = current_user.id
+    # Authenticate against a session that is closed before streaming starts.
+    db = SessionLocal()
+    try:
+        user = authenticate_stream_user(db, request.headers.get("authorization"))
+        user_id = user.id
+        # Nothing is written, but a read still opened a transaction.
+        db.rollback()
+    finally:
+        db.close()
 
     async def events():
         last: int | None = None
         # A bounded loop: a request that never returns ties up a worker, and
         # the client reconnects transparently when the stream ends.
-        for _ in range(600):  # ~10 minutes at 1s
-            current = service.unread_count(db, user_id)
+        for _ in range(STREAM_POLLS):
+            # Disconnected clients are common on mobile. Noticing here frees the
+            # worker immediately instead of polling into a closed socket.
+            if await request.is_disconnected():
+                return
+
+            poll_db = SessionLocal()
+            try:
+                current = service.unread_count(poll_db, user_id)
+                # A read still opens a transaction; without this the connection
+                # sits `idle in transaction` and holds its slot on the server.
+                poll_db.rollback()
+            finally:
+                poll_db.close()
+
             if current != last:
                 last = current
                 yield f"event: unread\ndata: {{\"unread\": {current}}}\n\n"
             else:
                 yield ": keep-alive\n\n"  # comment frame keeps proxies from timing out
-            await asyncio.sleep(1)
+            await asyncio.sleep(STREAM_POLL_SECONDS)
 
     return StreamingResponse(
         events(),
