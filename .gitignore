@@ -156,3 +156,7 @@ Thumbs.db
 
 # Local uploads (LocalStorage backend)
 uploads/
+
+# The mobile app is its own repository, checked out here for convenience.
+# Without this, `git add -A` commits it as a bogus gitlink.
+Elizade-mobile-app/
