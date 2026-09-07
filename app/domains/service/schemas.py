@@ -344,9 +344,7 @@ class CustomerAppointmentCreateIn(BaseModel):
     scheduled_at: datetime = Field(alias="scheduledAt")
     mileage_at_booking: int = Field(alias="mileageAtBooking", ge=0)
     issue_description: str = Field(alias="issueDescription", min_length=5, max_length=2000)
-    attachment_urls: Annotated[
-        list[str], Field(alias="attachmentUrls", max_length=5)
-    ] = Field(default_factory=list)
+    attachment_urls: list[str] = Field(default_factory=list, alias="attachmentUrls", max_length=5)
 
 
 class CustomerAppointmentRescheduleIn(BaseModel):

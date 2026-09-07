@@ -1,7 +1,5 @@
 from datetime import datetime
 
-from typing import Annotated
-
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -24,9 +22,9 @@ class BoardSettingsOut(BaseModel):
 class BoardSettingsUpdateIn(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    due_soon_km: Annotated[int | None, Field(alias="dueSoonKm", ge=0)] = None
-    due_soon_days: Annotated[int | None, Field(alias="dueSoonDays", ge=0)] = None
-    mileage_stale_days: Annotated[int | None, Field(alias="mileageStaleDays", ge=1)] = None
+    due_soon_km: int | None = Field(default=None, alias="dueSoonKm", ge=0)
+    due_soon_days: int | None = Field(default=None, alias="dueSoonDays", ge=0)
+    mileage_stale_days: int | None = Field(default=None, alias="mileageStaleDays", ge=1)
 
 
 class ServiceIntervalOut(BaseModel):
@@ -63,19 +61,19 @@ class ServiceIntervalCreateIn(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     service_item_id: str = Field(alias="serviceItemId")
-    vehicle_model_id: Annotated[str | None, Field(alias="vehicleModelId")] = None
+    vehicle_model_id: str | None = Field(default=None, alias="vehicleModelId")
     kind: str
-    interval_km: Annotated[int | None, Field(alias="intervalKm", gt=0)] = None
-    interval_months: Annotated[int | None, Field(alias="intervalMonths", gt=0)] = None
+    interval_km: int | None = Field(default=None, alias="intervalKm", gt=0)
+    interval_months: int | None = Field(default=None, alias="intervalMonths", gt=0)
 
 
 class ServiceIntervalUpdateIn(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     kind: str | None = None
-    interval_km: Annotated[int | None, Field(alias="intervalKm", gt=0)] = None
-    interval_months: Annotated[int | None, Field(alias="intervalMonths", gt=0)] = None
-    is_active: Annotated[bool | None, Field(alias="isActive")] = None
+    interval_km: int | None = Field(default=None, alias="intervalKm", gt=0)
+    interval_months: int | None = Field(default=None, alias="intervalMonths", gt=0)
+    is_active: bool | None = Field(default=None, alias="isActive")
 
 
 class ItemMaintenanceStatusOut(BaseModel):

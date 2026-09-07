@@ -47,55 +47,14 @@ from app.domains.users.models import DEFAULT_PREFERENCES, User, UserRole
 from app.main import app
 
 
-#: The `db` service in docker-compose.yml, on its published host port.
-_LOCAL_TEST_DB = "postgresql+psycopg2://elizade:elizade@localhost:5435/elizade_connect_test"
-
-#: Hosts that are unambiguously this machine.
-_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "db"})
-
-
 def _test_database_url() -> str:
-    """Where the suite runs. Local by default, remote only if you say so.
-
-    THIS USED TO DERIVE FROM `settings.database_url` UNCONDITIONALLY, and on any
-    machine whose `.env` points at the deployed database that meant the suite
-    ran against the PRODUCTION HOST — a `defaultdb_test` database beside the
-    live one.
-
-    Two costs, one obvious and one not:
-
-      * every query became a network round trip, so 675 tests took 33 minutes
-        instead of a couple. A suite that slow stops being run, which is how a
-        `NameError` in `documents.py` survived on main;
-      * the tests drew from the same 25-connection cap as live traffic, so a
-        test run competed with customers for connections — on an instance that
-        had just been taken down by connection exhaustion.
-
-    Nothing warned. It was the ordinary default, and the only symptom was
-    slowness that looked like "the suite is just big".
-
-    So: an explicit `TEST_DATABASE_URL` always wins; a `DATABASE_URL` that is
-    already local still derives `<db>_test`, which keeps single-Postgres dev
-    setups working; and anything else falls back to docker-compose rather than
-    quietly reaching for a remote server.
-    """
+    """Derive the test DB URL: explicit env override, else `<db>_test`."""
     explicit = os.getenv("TEST_DATABASE_URL")
     if explicit:
         return explicit
-
     base = make_url(get_settings().database_url)
-    if (base.host or "localhost") in _LOCAL_HOSTS:
-        # NB: str(URL) masks the password as "***"; render_as_string keeps it.
-        return base.set(database=f"{base.database}_test").render_as_string(hide_password=False)
-
-    # Remote. Say so loudly — silently testing against the wrong database in
-    # EITHER direction is worse than a noisy line at startup.
-    print(
-        f"\n[tests] DATABASE_URL points at a remote host ({base.host}); "
-        f"ignoring it and using the local docker-compose database instead.\n"
-        f"[tests] Set TEST_DATABASE_URL to override.\n"
-    )
-    return _LOCAL_TEST_DB
+    # NB: str(URL) masks the password as "***"; render_as_string keeps it intact.
+    return base.set(database=f"{base.database}_test").render_as_string(hide_password=False)
 
 
 TEST_DATABASE_URL = _test_database_url()
@@ -138,12 +97,9 @@ def _ensure_test_database_exists() -> None:
             conn.close()
 
     raise RuntimeError(
-        f"Cannot reach Postgres at {url.host}:{url.port} to create {url.database!r}.\n\n"
-        f"  Start the local test database:   docker compose up -d db\n"
-        f"  ...then re-run the suite.\n\n"
-        f"  Already have Postgres elsewhere?  set TEST_DATABASE_URL, e.g.\n"
-        f"    TEST_DATABASE_URL=postgresql+psycopg2://user:pass@localhost:5432/elizade_test\n\n"
-        f"  (Underlying error: {last_error})"
+        f"Could not reach a maintenance database ({', '.join(_MAINTENANCE_DBS)}) on "
+        f"{url.host}:{url.port} to create {url.database!r}. Set TEST_DATABASE_URL to "
+        f"point at a database you can already connect to."
     ) from last_error
 
 

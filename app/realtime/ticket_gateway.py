@@ -29,7 +29,6 @@ from app.domains.support.models import SupportTicket, TicketMessage
 from app.domains.users.models import User, UserRole
 from app.realtime import events
 from app.realtime.auth import authenticate
-from app.realtime import fanout
 from app.realtime.hub import Connection, hub, ticket_room
 
 logger = logging.getLogger("elizade.realtime")
@@ -180,12 +179,10 @@ async def _handle(
         outbound = (
             events.TYPING_START if event == events.CLIENT_TYPING_START else events.TYPING_STOP
         )
-        # exclude_id, not exclude: the Connection object does not survive a
-        # trip through Redis to another replica, but its id does.
-        await fanout.publish(
+        await hub.broadcast(
             room,
             events.envelope(outbound, {"ticketId": ticket_id, "userId": user.id, "role": role}),
-            exclude_id=connection.id,
+            exclude=connection,
         )
         return
 
@@ -193,7 +190,7 @@ async def _handle(
     if event == events.CLIENT_MARK_READ:
         marked = _mark_read(db, ticket_id, user, role)
         if marked:
-            await fanout.publish(
+            await hub.broadcast(
                 room,
                 events.envelope(
                     events.READ_RECEIPT,
@@ -289,10 +286,10 @@ async def _handle_message(
 
     payload = events.message_payload(message, ticket_id)
     payload["clientRef"] = client_ref
-    await fanout.publish(room, events.envelope(events.MESSAGE_RECEIVED, payload))
+    await hub.broadcast(room, events.envelope(events.MESSAGE_RECEIVED, payload))
 
     if ticket.status != previous_status:
-        await fanout.publish(
+        await hub.broadcast(
             room,
             events.envelope(
                 events.STATUS_CHANGED,

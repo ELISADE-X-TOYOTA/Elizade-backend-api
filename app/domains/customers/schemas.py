@@ -303,18 +303,12 @@ class DuplicateCustomerReviewIn(BaseModel):
 class CustomerMergeIn(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    # No `alias=` on these: the field names are ALREADY the camelCase wire
-    # names, so each alias merely repeated its own field name. That made them
-    # look like the genuinely broken cases elsewhere (a snake_case field whose
-    # camelCase alias newer pydantic silently drops) while being a no-op.
-    # Removing them is behaviour-preserving and stops the lint pointing at
-    # fields that were never at risk.
-    sourceCustomerId: str | None = None
-    targetCustomerId: str | None = None
-    mergedCustomerId: str | None = None
-    survivingCustomerId: str | None = None
-    duplicateCustomerId: str | None = None
-    keepCustomerId: str | None = None
+    sourceCustomerId: str | None = Field(default=None, alias="sourceCustomerId")
+    targetCustomerId: str | None = Field(default=None, alias="targetCustomerId")
+    mergedCustomerId: str | None = Field(default=None, alias="mergedCustomerId")
+    survivingCustomerId: str | None = Field(default=None, alias="survivingCustomerId")
+    duplicateCustomerId: str | None = Field(default=None, alias="duplicateCustomerId")
+    keepCustomerId: str | None = Field(default=None, alias="keepCustomerId")
 
 
 class CustomerMergeOut(BaseModel):

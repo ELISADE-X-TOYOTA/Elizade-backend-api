@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -59,13 +58,6 @@ class Connection:
     #: "customer" or "staff" — decides what this connection may be sent.
     role: str
     rooms: set[str] = field(default_factory=set)
-    #: Stable id for this socket, unique across the whole deployment.
-    #:
-    #: Object identity is enough to exclude the originator inside one process,
-    #: but not once a broadcast travels through Redis to another replica: the
-    #: `Connection` object does not make the trip. This id does, so "everyone
-    #: except the person typing" keeps working across replicas.
-    id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
 
 class Hub:
@@ -112,16 +104,11 @@ class Hub:
         payload: dict[str, Any],
         *,
         exclude: Connection | None = None,
-        exclude_id: str | None = None,
     ) -> int:
         """Send `payload` to every socket in `room`. Returns the count sent.
 
         `exclude` skips the originator — used for typing indicators, where
         echoing someone's own keystrokes back is pure noise.
-
-        `exclude_id` does the same thing by id rather than by object, which is
-        the only form that survives a trip through Redis to another replica.
-        Both are accepted so in-process callers keep working unchanged.
 
         A socket that raises is dropped rather than retried. It has already
         gone away; the client reconnects and re-syncs over REST, which is the
@@ -129,11 +116,7 @@ class Hub:
         broadcast on a dead peer.
         """
         async with self._lock:
-            targets = [
-                c
-                for c in self._rooms.get(room, set())
-                if c is not exclude and (exclude_id is None or c.id != exclude_id)
-            ]
+            targets = [c for c in self._rooms.get(room, set()) if c is not exclude]
 
         if not targets:
             return 0
@@ -164,16 +147,8 @@ class Broadcaster:
     saved reply would be a lost message.
     """
 
-    def __init__(self, hub: Hub, deliver: Any = None) -> None:
+    def __init__(self, hub: Hub) -> None:
         self.hub = hub
-        #: Optional `async (room, payload) -> None` used instead of the local
-        #: hub. `fanout` sets this on the production singleton at import, which
-        #: is what makes a REST-initiated broadcast cross replicas.
-        #:
-        #: Left unset it delivers to `hub` directly — correct for a single
-        #: replica, and it keeps `Broadcaster(hub)` meaning what it says, so a
-        #: test can hand in its own hub and get its own deliveries.
-        self.deliver = deliver
 
     def publish(self, room: str, payload: dict[str, Any]) -> None:
         try:
@@ -186,14 +161,7 @@ class Broadcaster:
 
     async def _safe_broadcast(self, room: str, payload: dict[str, Any]) -> None:
         try:
-            # A reply posted over REST reaches a customer whose socket lives on
-            # ANOTHER replica only if it crosses the bus. Delivering to the
-            # local hub instead would work whenever the two happen to share a
-            # process and not otherwise — a bug that presents as flakiness.
-            if self.deliver is not None:
-                await self.deliver(room, payload)
-            else:
-                await self.hub.broadcast(room, payload)
+            await self.hub.broadcast(room, payload)
         except Exception:  # noqa: BLE001 — a fire-and-forget task must not die loudly
             logger.exception("broadcast to %s failed", room)
 
