@@ -47,23 +47,27 @@ def save_upload(file: UploadFile, storage) -> str:
 
     Raises 413 for oversize and 415 for a type we will not serve back.
     """
-    from app.domains.shared.documents import validate_upload_content_type
-
-    validate_upload_content_type(file.content_type)
+    from app.domains.shared.documents import validate_upload
 
     content = file.file.read()
-    if not content:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="That file is empty.")
-    if len(content) > MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="File too large (max 10MB)",
-        )
+
+    # `validate_upload`, NOT `validate_upload_content_type`.
+    #
+    # The latter only checks the Content-Type the CLIENT declared, which is
+    # simply a header the caller writes. `b"not a movie"` sent as video/mp4
+    # passed it and was stored. The only thing that had ever refused that was
+    # an accident — mp4 was missing from the extension table, so the save blew
+    # up later for an unrelated reason. Fixing the table removed the accident
+    # and exposed the hole underneath it.
+    #
+    # This one checks the file SIGNATURE against the declared type, applies the
+    # right size ceiling per type (10MB documents, 50MB video), and bounds video
+    # duration. It returns the canonical type, which is what storage should name
+    # the file by — never the client's string.
+    canonical = validate_upload(content, file.filename, file.content_type)
 
     try:
-        return storage.save(
-            content=content, filename=file.filename, content_type=file.content_type
-        )
+        return storage.save(content=content, filename=file.filename, content_type=canonical)
     except UnsupportedFileType as exc:
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=str(exc)
