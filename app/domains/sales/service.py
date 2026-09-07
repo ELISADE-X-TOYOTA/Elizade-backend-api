@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session, joinedload
 from app.domains.branches.models import Branch
 from app.domains.inventory.models import Vehicle
 from app.domains.leads.models import Lead
+from app.domains.notifications import catalog
+from app.domains.notifications.notify import safe_notify
 from app.domains.sales.models import Quotation, QuotationLineItem, Reservation, TestDriveBooking, TradeInRequest
 from app.domains.sales.schemas import (
     QuotationOut,
@@ -188,6 +190,31 @@ def request_quotation(db: Session, user: User, payload: QuotationRequestIn) -> Q
         .options(joinedload(Quotation.vehicle), joinedload(Quotation.line_items))
         .filter(Quotation.id == row.id)
         .one()
+    )
+
+    # THE APP PROMISES THIS AND NOTHING DELIVERED IT.
+    #
+    # The success sheet says "A formal quotation ... will be sent to your email
+    # and appear in Support shortly", and the row was written with
+    # `status=sent` — but nothing was ever sent. There was no failing worker
+    # and no queue to repair: the call simply did not exist.
+    #
+    # `sales.quotation_issued` was already in the notification catalog, with
+    # in-app, push and email channels declared, and had never been fired by
+    # anything. So this is the missing call, not a new mechanism.
+    #
+    # `safe_notify` because a quote that was created must stand even if
+    # Postmark is down — a customer would rather have a quote and no email
+    # than a 500 and neither.
+    safe_notify(
+        db,
+        user=user,
+        event=catalog.QUOTATION_ISSUED,
+        context={
+            "vehicle_label": f"{vehicle.year} {vehicle.make} {vehicle.model}".strip(),
+            # Date only: a customer needs the day it lapses, not a timestamp.
+            "valid_until": valid_until.strftime("%d %B %Y"),
+        },
     )
     return QuotationOut.from_model(loaded)
 
