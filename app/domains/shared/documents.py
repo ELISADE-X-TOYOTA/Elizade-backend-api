@@ -22,12 +22,20 @@ _ALLOWED_CONTENT_TYPES = frozenset(
     }
 )
 
+#: MUST cover every type in `_ALLOWED_CONTENT_TYPES`. The two lists had drifted:
+#: video/mp4 and video/quicktime were accepted by `validate_upload_content_type`
+#: and then had no extension to store under, so an mp4 walkaround video was
+#: refused with "Allowed: JPEG, PNG, WebP, PDF" — an error that contradicted
+#: the endpoint that had just accepted it. `app/services/spaces.py` already
+#: mapped both; only this table was missing them.
 _CONTENT_TYPE_TO_EXTENSION = {
     "image/jpeg": "jpg",
     "image/jpg": "jpg",
     "image/png": "png",
     "image/webp": "webp",
     "application/pdf": "pdf",
+    "video/mp4": "mp4",
+    "video/quicktime": "mov",
 }
 _ALLOWED_EXTENSIONS = frozenset(_CONTENT_TYPE_TO_EXTENSION.values())
 
