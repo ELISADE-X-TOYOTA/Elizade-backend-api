@@ -13,7 +13,7 @@ from app.domains.auth import review_bypass
 from app.domains.users.models import User, UserRole
 
 REVIEW_EMAIL = "appreview@elizade.com"
-REVIEW_CODE = "Rv7Kq2Xm"  # 8 chars: the endpoint's maximum, and the guard's minimum
+REVIEW_CODE = "Rv7Kqm"  # 6 chars: the app renders six OTP boxes, so this is the ceiling
 
 
 @pytest.fixture
@@ -186,13 +186,13 @@ def test_a_missing_review_account_is_not_created(client, db_session, bypass_on):
 # ── Configuration guard ──────────────────────────────────────────────────
 
 
-def test_a_short_code_is_refused_at_startup(monkeypatch):
-    """`123456` is a six-digit space and this code never rotates."""
+def test_an_all_digit_code_is_refused_at_startup(monkeypatch):
+    """`123456` is a million combinations and this code never rotates."""
     s = get_settings()
     monkeypatch.setattr(s, "review_account_email", REVIEW_EMAIL, raising=False)
     monkeypatch.setattr(s, "review_account_otp", "123456", raising=False)
     problems = review_bypass.validate_configuration()
-    assert problems and "at least" in problems[0]
+    assert problems and "letter" in problems[0]
 
 
 def test_half_configured_is_refused_at_startup(monkeypatch):
@@ -207,3 +207,18 @@ def test_unconfigured_is_valid(monkeypatch):
     monkeypatch.setattr(s, "review_account_email", "", raising=False)
     monkeypatch.setattr(s, "review_account_otp", "", raising=False)
     assert review_bypass.validate_configuration() == []
+
+
+def test_a_code_longer_than_the_app_can_accept_is_refused(monkeypatch):
+    """THE BUG THIS CAUGHT LATE.
+
+    The first version shipped an 8-character code. The app's OTP screen has six
+    boxes and stripped letters, so it could not be typed OR pasted — a reviewer
+    would have been stranded on the exact screen this feature exists to skip.
+    Backend tests POST straight to the API and never saw it.
+    """
+    s = get_settings()
+    monkeypatch.setattr(s, "review_account_email", REVIEW_EMAIL, raising=False)
+    monkeypatch.setattr(s, "review_account_otp", "Rv7Kq2Xm", raising=False)
+    problems = review_bypass.validate_configuration()
+    assert problems and "6 characters" in problems[0]

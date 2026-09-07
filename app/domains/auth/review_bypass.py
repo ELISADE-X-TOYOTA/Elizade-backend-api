@@ -50,18 +50,17 @@ from app.domains.users.models import User, UserRole
 
 logger = logging.getLogger("elizade.auth.review")
 
-#: Shorter than this is refused at startup.
+#: The reviewer code is exactly SIX characters, and that is set by the app,
+#: not by taste: the OTP screen renders six boxes. A longer code cannot be
+#: entered at all, which is how the first version of this shipped — an
+#: 8-character code that no reviewer could have typed, on the very screen this
+#: feature exists to get them past.
 #:
-#: 8 is also the CEILING: `OtpVerifyIn.code` is `Field(min_length=4,
-#: max_length=8)`, so a longer code is rejected as malformed before it ever
-#: reaches this module — it would look like a broken bypass rather than a
-#: configuration error. So the reviewer code is exactly 8 characters.
-#:
-#: That is not a compromise worth worrying about: 8 random alphanumerics is
-#: about 2e14 combinations, against an endpoint that is rate limited. Six
-#: DIGITS, the shape people reach for by default, is a million — which a
-#: script exhausts, and which is why the floor exists at all.
-MIN_CODE_LENGTH = 8
+#: Six DIGITS would be a million combinations, and `/auth/otp/verify` has no
+#: throttle on this branch. So the code must contain at least one letter:
+#: six alphanumerics is ~57 billion, and it also guarantees the fixed code can
+#: never be confused with a real six-digit OTP.
+MIN_CODE_LENGTH = 6
 
 
 def is_enabled() -> bool:
@@ -122,11 +121,17 @@ def validate_configuration() -> list[str]:
             "REVIEW_ACCOUNT_EMAIL and REVIEW_ACCOUNT_OTP must be set together; "
             "one without the other does nothing."
         )
-    if code and len(code) < MIN_CODE_LENGTH:
+    if code and len(code) != MIN_CODE_LENGTH:
         problems.append(
-            f"REVIEW_ACCOUNT_OTP must be at least {MIN_CODE_LENGTH} characters. "
-            f"This code never expires and never rotates, so a short one is a "
-            f"standing invitation — use a random string, not 123456."
+            f"REVIEW_ACCOUNT_OTP must be exactly {MIN_CODE_LENGTH} characters — "
+            f"the app's OTP screen has {MIN_CODE_LENGTH} boxes, so anything "
+            f"longer cannot be entered."
+        )
+    if code and code.isdigit():
+        problems.append(
+            "REVIEW_ACCOUNT_OTP must contain at least one letter. Six digits is "
+            "a million combinations for a code that never expires and never "
+            "rotates — use something like 'Rv7Kqm', not '123456'."
         )
     return problems
 
