@@ -1,6 +1,8 @@
 from datetime import datetime
 from decimal import Decimal
 
+from typing import Annotated
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -123,5 +125,5 @@ class PriceImportPublishOut(BaseModel):
 class PricePublishIn(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    effective_from: datetime | None = Field(default=None, alias="effectiveFrom")
+    effective_from: Annotated[datetime | None, Field(alias="effectiveFrom")] = None
     disclaimer: str | None = Field(default=None, max_length=2000)
