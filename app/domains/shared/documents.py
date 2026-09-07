@@ -22,14 +22,44 @@ _ALLOWED_CONTENT_TYPES = frozenset(
     }
 )
 
+#: MUST cover every type in `_ALLOWED_CONTENT_TYPES`. The two lists had drifted:
+#: video/mp4 and video/quicktime were accepted by `validate_upload_content_type`
+#: and then had no extension to store under, so an mp4 walkaround video was
+#: refused with "Allowed: JPEG, PNG, WebP, PDF" — an error that contradicted
+#: the endpoint that had just accepted it. `app/services/spaces.py` already
+#: mapped both; only this table was missing them.
 _CONTENT_TYPE_TO_EXTENSION = {
     "image/jpeg": "jpg",
     "image/jpg": "jpg",
     "image/png": "png",
     "image/webp": "webp",
     "application/pdf": "pdf",
+    "video/mp4": "mp4",
+    "video/quicktime": "mov",
 }
 _ALLOWED_EXTENSIONS = frozenset(_CONTENT_TYPE_TO_EXTENSION.values())
+
+#: A FLAT storage filename — a stem with no dots or separators, then one safe
+#: extension. Used with `fullmatch`, so nothing may precede or follow it, and
+#: the charset admits no `/`, `\` or `.` in the stem. That is what stops
+#: `../../etc/passwd` and every variation on it.
+#:
+#: WAS MISSING ENTIRELY. `normalize_document_urls` referenced this name without
+#: it ever being defined, so every ownership claim submitted WITH documents
+#: died on `NameError` — a 500 on the main path of the feature. It failed
+#: closed, so nothing unsafe was accepted, but nothing valid was either.
+#:
+#: Deliberately NOT pinned to the `uuid4().hex` form that `LocalStorage.save`
+#: currently emits. This validates a key the client hands back, and coupling it
+#: to today's key-generation scheme would silently invalidate every stored file
+#: the day that scheme changes. The shape is the security property; the exact
+#: stem is not.
+#:
+#: The extension set is the one STORAGE can produce, deliberately wider than
+#: this module's `_ALLOWED_EXTENSIONS`: support attachments include mp4/mov,
+#: and rejecting a key here that the system itself wrote would be a second bug
+#: wearing the first one's clothes.
+_SAFE_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,99}\.(?:jpg|jpeg|png|webp|pdf|mp4|mov)")
 
 
 class UnsupportedUploadExtension(ValueError):
@@ -101,8 +131,14 @@ def validate_upload(content: bytes, filename: str | None, content_type: str | No
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail="The file type or file contents are not supported",
         )
+    # `_CONTENT_TYPE_TO_EXTENSION`, not `_EXTENSIONS` — the latter is a name
+    # that has never existed in this module. A SECOND undefined reference
+    # alongside `_SAFE_KEY`, and reachable on a real path: this branch runs
+    # whenever the client sends `application/octet-stream` or no type at all,
+    # which Android upload libraries routinely do. It raised NameError -> 500
+    # rather than falling back to the filename extension as intended.
     canonical = declared if declared in _ALLOWED_CONTENT_TYPES else next(
-        (mime for mime, ext in _EXTENSIONS.items() if ext == suffix),
+        (mime for mime, ext in _CONTENT_TYPE_TO_EXTENSION.items() if ext == suffix),
         None,
     )
     detected = _detected_type(content)
