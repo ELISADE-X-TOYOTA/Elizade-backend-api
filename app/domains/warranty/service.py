@@ -1,3 +1,4 @@
+import logging
 import math
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -26,7 +27,7 @@ from app.domains.warranty.policy import (
     warranty_end_from_in_service,
 )
 from app.domains.notifications import catalog
-from app.domains.notifications.notify import safe_notify
+from app.domains.notifications.notify import notify, safe_notify
 from app.domains.warranty.schemas import (
     CertificateCreateIn,
     ClaimCreateIn,
@@ -40,6 +41,8 @@ from app.domains.warranty.schemas import (
     WarrantyClaimListItemOut,
     WarrantySummaryOut,
 )
+
+logger = logging.getLogger("elizade.warranty")
 
 TERMINAL_CLAIM_STATUSES = {ClaimStatus.approved, ClaimStatus.rejected, ClaimStatus.closed}
 PENDING_CLAIM_STATUSES = (ClaimStatus.submitted, ClaimStatus.under_review, ClaimStatus.escalated)
@@ -379,14 +382,57 @@ def notify_recall(db: Session, recall_id: str) -> RecallNotifyOut:
     now = datetime.now(timezone.utc)
     pending = (
         db.query(RecallVehicle)
+        .options(joinedload(RecallVehicle.customer), joinedload(RecallVehicle.owned_vehicle))
         .filter(RecallVehicle.recall_id == recall.id, RecallVehicle.notified_at.is_(None))
         .all()
     )
+
+    # THIS FUNCTION USED TO SEND NOTHING.
+    #
+    # It stamped `notified_at` on every affected vehicle and returned
+    # `notifiedCount`, so an admin pressed "notify owners" on a SAFETY RECALL,
+    # read "47 notified", and not one owner heard. A silent failure would have
+    # been better: this actively reported success, and stamping the column
+    # meant a second attempt found nothing pending and sent nothing again.
+    #
+    # `notified_at` is now set only for owners who were actually reached, so
+    # the button can be pressed again to catch the rest.
+    notified = 0
     for row in pending:
-        row.notified_at = now
+        label = _vehicle_label(row.owned_vehicle)
+        # `notify`, not `safe_notify`: the latter returns None, and this needs
+        # to know whether anything actually reached the owner before it dares
+        # stamp the row as notified. The try/except gives the same guarantee —
+        # one unreachable owner must not stop a safety campaign.
+        try:
+            result = notify(
+                db,
+                user=row.customer,
+                event=catalog.RECALL_AFFECTS_VEHICLE,
+                context={
+                    "severity": recall.severity.value,
+                    "vehicle_label": label,
+                    "recall_title": recall.title,
+                },
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "recall %s: notification raised for vehicle %s",
+                recall.reference_code, row.owned_vehicle_id,
+            )
+            continue
+
+        if result.sent:
+            row.notified_at = now
+            notified += 1
+        else:
+            logger.error(
+                "recall %s: no channel reached the owner of vehicle %s (failed=%s)",
+                recall.reference_code, row.owned_vehicle_id, result.failed,
+            )
 
     db.commit()
-    return RecallNotifyOut(recall=_recall_out(db, recall), notifiedCount=len(pending))
+    return RecallNotifyOut(recall=_recall_out(db, recall), notifiedCount=notified)
 
 
 def issue_standard_certificate(
