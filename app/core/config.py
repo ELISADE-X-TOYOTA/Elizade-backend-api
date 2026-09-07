@@ -14,6 +14,18 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 60
     otp_expire_minutes: int = 10
     otp_length: int = 6
+
+    # ── App Store / Play Store reviewer sign-in ──────────────────────────
+    # One nominated account may sign in with a fixed code instead of an
+    # emailed OTP, because review teams cannot receive one. Both must be set
+    # or the bypass stays off, so a default build has no back door.
+    #
+    # This is a PERMANENT credential that is pasted into two third-party
+    # consoles. Point it at a customer-role account holding demo data only,
+    # use a long random string rather than 123456, and unset both once the
+    # app is through review. See `domains/auth/review_bypass.py`.
+    review_account_email: str = ""
+    review_account_otp: str = ""
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,https://elizade-web.vercel.app"
 
     smtp_host: str = ""
