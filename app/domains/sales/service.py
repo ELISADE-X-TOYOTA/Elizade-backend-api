@@ -207,17 +207,78 @@ def request_quotation(db: Session, user: User, payload: QuotationRequestIn) -> Q
     # `safe_notify` because a quote that was created must stand even if
     # Postmark is down — a customer would rather have a quote and no email
     # than a 500 and neither.
+    #
+    # AND IT HAS TO CONTAIN THE QUOTE. The first version of this call sent the
+    # catalog body and nothing else — "We've prepared your quote for the 2024
+    # Corolla. It's valid until 21 September 2026." True, and containing no
+    # figures. A customer who opened it still had no quotation, which is the
+    # same complaint one step later. The email now carries the breakdown, the
+    # total and the reference, so it IS the formal quotation the app promised.
+    vehicle_label = f"{vehicle.year} {vehicle.make} {vehicle.model}".strip()
+    # Date only: a customer needs the day it lapses, not a timestamp.
+    valid_until_label = valid_until.strftime("%d %B %Y")
+    quote_email = _quotation_email(
+        user=user,
+        quotation=loaded,
+        vehicle_label=vehicle_label,
+        valid_until_label=valid_until_label,
+    )
+
     safe_notify(
         db,
         user=user,
         event=catalog.QUOTATION_ISSUED,
         context={
-            "vehicle_label": f"{vehicle.year} {vehicle.make} {vehicle.model}".strip(),
-            # Date only: a customer needs the day it lapses, not a timestamp.
-            "valid_until": valid_until.strftime("%d %B %Y"),
+            "vehicle_label": vehicle_label,
+            "valid_until": valid_until_label,
         },
+        email_text=quote_email["text"],
+        email_html=quote_email["html"],
     )
     return QuotationOut.from_model(loaded)
+
+
+def _quotation_reference(quotation_id: str) -> str:
+    """A short, quotable handle for the customer and the sales desk.
+
+    Derived from the row id rather than a counter so it needs no extra column
+    and cannot collide. Uppercased hex reads over the phone far better than a
+    full UUID does.
+    """
+    return f"Q-{quotation_id.replace('-', '')[:8].upper()}"
+
+
+def _quotation_email(
+    *,
+    user: User,
+    quotation: Quotation,
+    vehicle_label: str,
+    valid_until_label: str,
+) -> dict[str, str]:
+    """Render the quotation as an actual document, both plain text and HTML."""
+    from app.services.email_templates import (  # noqa: PLC0415 — avoids an import cycle
+        build_quotation_html,
+        build_quotation_plain_text,
+    )
+
+    items = [(li.description, li.amount) for li in sorted(quotation.line_items, key=lambda li: li.sort_order)]
+    # A quote with no line items would render an empty table. Falling back to
+    # the vehicle itself keeps the document meaningful rather than blank.
+    if not items:
+        items = [(vehicle_label, quotation.total)]
+
+    fields = {
+        "customer_name": (user.first_name or "").strip(),
+        "vehicle_label": vehicle_label,
+        "line_items": items,
+        "total": quotation.total,
+        "valid_until": valid_until_label,
+        "reference": _quotation_reference(quotation.id),
+    }
+    return {
+        "text": build_quotation_plain_text(**fields),
+        "html": build_quotation_html(**fields),
+    }
 
 
 def list_my_reservations(db: Session, user_id: str) -> list[ReservationOut]:
