@@ -21,9 +21,31 @@ class TestDriveOut(BaseModel):
     branchId: str
     branchName: str
     scheduledAt: str
+    #: THE BOOKING's own status. Set to `requested` at creation and never
+    #: changed by anything in this codebase — there is no admin endpoint for
+    #: test drive bookings at all. Kept because clients read it, but it is not
+    #: the field to show a customer.
     status: str
     notes: str | None = None
     leadId: str | None = None
+
+    #: The LIVE pipeline stage, from the lead this booking created.
+    #:
+    #: THIS IS THE FIX FOR "status is stuck on Requested". Booking a test drive
+    #: creates two rows: a TestDriveBooking and a Lead. Sales staff advance the
+    #: LEAD through the pipeline; nothing ever touches the booking. The app was
+    #: reading `status`, so it showed "Requested" forever no matter how far the
+    #: enquiry had actually progressed.
+    #:
+    #: Mapped through `leads.tracking.to_stage`, the same function the customer
+    #: lead screens use, so the two can never disagree about what a customer is
+    #: told. Null only when a booking predates lead linking.
+    leadStage: str | None = None
+    leadStageLabel: str | None = None
+    #: Position in the tracker, so a card can render progress without
+    #: duplicating the mapping rules.
+    leadStepIndex: int | None = None
+    leadStepCount: int | None = None
     createdAt: str
 
     @staticmethod
@@ -35,6 +57,13 @@ class TestDriveOut(BaseModel):
             if vehicle
             else "Vehicle"
         )
+        # Imported here rather than at module scope: sales already imports
+        # leads elsewhere and a top-level import closes the cycle.
+        from app.domains.leads.tracking import STAGE_LABELS, STAGE_ORDER, step_index, to_stage
+
+        lead = getattr(booking, "lead", None)
+        stage = to_stage(lead.status) if lead is not None else None
+
         return TestDriveOut(
             id=booking.id,
             vehicleId=booking.vehicle_id,
@@ -45,6 +74,10 @@ class TestDriveOut(BaseModel):
             status=booking.status.value,
             notes=booking.notes,
             leadId=booking.lead_id,
+            leadStage=stage.value if stage else None,
+            leadStageLabel=STAGE_LABELS[stage] if stage else None,
+            leadStepIndex=step_index(stage) if stage else None,
+            leadStepCount=len(STAGE_ORDER) if stage else None,
             createdAt=booking.created_at.isoformat(),
         )
 

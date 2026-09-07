@@ -36,6 +36,15 @@ class TestDriveBooking(Base):
     user: Mapped["User"] = relationship(back_populates="test_drive_bookings")
     vehicle: Mapped["Vehicle"] = relationship(back_populates="test_drive_bookings")
     branch: Mapped["Branch"] = relationship(back_populates="test_drive_bookings")
+    #: The sales lead this booking created. The FK was here from the start; the
+    #: relationship was not, so nothing could read the lead's live pipeline
+    #: stage — which is why the app showed "Requested" forever while staff
+    #: advanced the enquiry.
+    #:
+    #: No `back_populates`: Lead has no bookings collection and does not need
+    #: one, and adding a reverse side would make every lead load eligible to
+    #: drag bookings along with it.
+    lead: Mapped["Lead | None"] = relationship(foreign_keys=[lead_id])
 
 
 class Quotation(Base):

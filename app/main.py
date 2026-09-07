@@ -10,6 +10,7 @@ from app.core.config import get_settings
 from app.core.database import Base, engine, SessionLocal
 from app.core.deps import CurrentUser
 from app.core.migrations import run_startup_migrations
+from app.domains.auth import review_bypass
 from app.core.seed import seed_all
 from app.domains.registry import *  # noqa: F403 — register all ORM models before routers
 from app.domains.ownership.storage import storage
@@ -20,6 +21,14 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    # Refuse to start on a misconfigured reviewer bypass rather than boot with
+    # a weak standing credential nobody notices. Announced either way — a back
+    # door that starts silently is the kind that outlives its purpose.
+    problems = review_bypass.validate_configuration()
+    if problems:
+        raise RuntimeError("Invalid reviewer configuration:\n  - " + "\n  - ".join(problems))
+    review_bypass.log_status()
+
     Base.metadata.create_all(bind=engine)
     run_startup_migrations(engine)
     db = SessionLocal()

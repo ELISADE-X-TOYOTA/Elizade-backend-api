@@ -37,7 +37,14 @@ def _vehicle_label(vehicle: Vehicle) -> str:
 def list_my_test_drives(db: Session, user_id: str) -> list[TestDriveOut]:
     rows = (
         db.query(TestDriveBooking)
-        .options(joinedload(TestDriveBooking.vehicle), joinedload(TestDriveBooking.branch))
+        # `lead` is eager-loaded with the rest: the payload now reports the
+        # lead's live stage, and without this a customer with 50 bookings
+        # would issue 50 extra queries to render one list.
+        .options(
+            joinedload(TestDriveBooking.vehicle),
+            joinedload(TestDriveBooking.branch),
+            joinedload(TestDriveBooking.lead),
+        )
         .filter(TestDriveBooking.user_id == user_id)
         .order_by(TestDriveBooking.scheduled_at.desc())
         .limit(50)

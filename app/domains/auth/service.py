@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 
 from fastapi import HTTPException, status
@@ -12,9 +13,12 @@ from app.core.security import (
 )
 from app.domains.auth.schemas import AuthTokenOut, OtpRequestIn, OtpRequestOut, OtpVerifyIn
 from app.domains.auth import refresh as refresh_service
+from app.domains.auth import review_bypass
 from app.domains.users.models import DEFAULT_PREFERENCES, OtpChallenge, OtpPurpose, User, UserRole
 from app.domains.users.schemas import UserProfileOut
 from app.services.otp import MAX_OTP_ATTEMPTS, create_and_dispatch_otp
+
+logger = logging.getLogger("elizade.auth")
 
 settings = get_settings()
 
@@ -23,6 +27,28 @@ def _apply_admin_role(user: User) -> None:
     if user.email and normalize_email(user.email) == normalize_email(settings.admin_email):
         user.role = UserRole.admin
         user.department = user.department or "Management"
+
+
+def _issue_session(db: Session, user: User) -> AuthTokenOut:
+    """Mint an access/refresh pair for an already-authenticated user.
+
+    Extracted so the reviewer path and the ordinary OTP path cannot drift —
+    a second hand-rolled token mint is how one of them ends up missing
+    refresh-token rotation.
+
+    Deliberately does NOT touch `is_verified`, `is_active` or the role. The
+    OTP path sets those because verifying a code is what proves the address;
+    the reviewer path has proved nothing about a mailbox and must not
+    silently upgrade an account.
+    """
+    token = create_access_token(user.id)
+    refresh = refresh_service.issue(db, user.id)
+    db.commit()
+    return AuthTokenOut(
+        access_token=token,
+        refresh_token=refresh,
+        user=UserProfileOut.from_user(user),
+    )
 
 
 def request_otp(db: Session, payload: OtpRequestIn) -> OtpRequestOut:
@@ -38,6 +64,19 @@ def request_otp(db: Session, payload: OtpRequestIn) -> OtpRequestOut:
             )
         if not user.is_active:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is deactivated. Contact admin.")
+
+        # The store reviewer's fixed code is already valid, so no challenge is
+        # created and no mail is sent. Returning success rather than an error
+        # matters: the app shows its normal "code sent" screen, and the
+        # reviewer follows the ordinary flow with the code from our notes.
+        # Sending a real email here would also be pointless — nobody is
+        # reading that mailbox.
+        if review_bypass.is_review_email(email_norm) and review_bypass.may_bypass(user):
+            logger.warning("[REVIEW] fixed-code sign-in requested for %s", email_norm)
+            return OtpRequestOut(
+                message="Verification code sent.",
+                expires_in_minutes=settings.otp_expire_minutes,
+            )
     else:
         if not payload.first_name or not payload.last_name:
             raise HTTPException(
@@ -93,6 +132,22 @@ def verify_otp(db: Session, payload: OtpVerifyIn) -> AuthTokenOut:
     email_norm = normalize_email(str(payload.email))
     code = payload.code.strip()
 
+    # ── Store-reviewer fixed code ────────────────────────────────────────
+    # Checked BEFORE the challenge lookup, because `request_otp` deliberately
+    # created no challenge for this account — looking one up would fail with
+    # "No active verification code" and the reviewer would be stuck on exactly
+    # the screen this exists to get them past.
+    #
+    # `may_bypass` re-checks the account is an active customer on every
+    # attempt. A wrong code here falls through to the normal path and is
+    # rejected like any other, so the fixed code is not a way to skip
+    # verification — only a way to satisfy it without a mailbox.
+    if review_bypass.is_review_email(email_norm) and review_bypass.code_matches(code):
+        reviewer = db.query(User).filter(User.email == email_norm).one_or_none()
+        if review_bypass.may_bypass(reviewer):
+            logger.warning("[REVIEW] fixed-code sign-in accepted for %s", email_norm)
+            return _issue_session(db, reviewer)
+
     challenge = (
         db.query(OtpChallenge)
         .filter(
@@ -137,16 +192,10 @@ def verify_otp(db: Session, payload: OtpVerifyIn) -> AuthTokenOut:
     db.commit()
     db.refresh(user)
 
-    token = create_access_token(user.id)
-    # A refresh token is minted here and ONLY here (plus rotation). This is the
-    # single point where a new session family begins.
-    refresh = refresh_service.issue(db, user.id)
-    db.commit()
-    return AuthTokenOut(
-        access_token=token,
-        refresh_token=refresh,
-        user=UserProfileOut.from_user(user),
-    )
+    # A refresh token is minted in `_issue_session` and ONLY there (plus
+    # rotation). One place where a session family begins, shared with the
+    # reviewer path so neither can lose rotation independently.
+    return _issue_session(db, user)
 
 
 def get_me(user: User) -> UserProfileOut:
