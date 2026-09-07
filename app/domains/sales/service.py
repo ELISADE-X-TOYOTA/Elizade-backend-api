@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.domains.branches.models import Branch
 from app.domains.inventory.models import Vehicle
+from app.domains.inventory import service as inventory_service
 from app.domains.leads.models import Lead
 from app.domains.notifications import catalog
 from app.domains.notifications.notify import safe_notify
@@ -262,7 +263,11 @@ def create_reservation(db: Session, user: User, payload: ReservationCreateIn) ->
         expires_at=expires_at,
     )
     db.add(row)
-    vehicle.availability = AvailabilityStatus.reserved
+    # Through the one door, so Notify Me subscribers hear about it too.
+    # Not strict: a mail outage must not fail a customer's reservation.
+    inventory_service.set_availability(
+        db, vehicle, AvailabilityStatus.reserved, strict_notify=False
+    )
     db.commit()
     loaded = db.query(Reservation).options(joinedload(Reservation.vehicle)).filter(Reservation.id == row.id).one()
     return ReservationOut.from_model(loaded)

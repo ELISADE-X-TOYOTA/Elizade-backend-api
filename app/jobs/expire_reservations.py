@@ -53,6 +53,7 @@ from app.core.database import SessionLocal
 # because nothing else has imported the app.
 from app.domains.registry import *  # noqa: F401,F403
 from app.domains.inventory.models import Vehicle
+from app.domains.inventory.service import set_availability
 from app.domains.sales.models import Reservation
 from app.domains.shared.enums import AvailabilityStatus, ReservationStatus
 
@@ -106,7 +107,12 @@ def expire_due(db: Session, *, now: datetime | None = None, dry_run: bool = Fals
         vehicle = db.get(Vehicle, vehicle_id)
         # `sold` is never walked back by a timeout: the car is gone.
         if vehicle is not None and vehicle.availability == AvailabilityStatus.reserved:
-            vehicle.availability = AvailabilityStatus.available
+            # Through `set_availability`, not a bare assignment: a car coming
+            # back on sale is the single moment a Notify Me subscriber most
+            # wants to hear about, and writing the column directly told nobody.
+            # strict_notify=False: a mail outage must not abort the sweep and
+            # leave a dozen cars locked. The release matters more than the alert.
+            set_availability(db, vehicle, AvailabilityStatus.available, strict_notify=False)
             released += 1
 
     if dry_run:

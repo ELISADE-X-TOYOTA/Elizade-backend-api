@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.domains.customers.models import OwnedVehicle
 from app.domains.inventory.models import Vehicle
+from app.domains.inventory import service as inventory_service
 from app.domains.notifications import catalog
 from app.domains.notifications.notify import safe_notify
 from app.domains.ownership.models import VehicleOwnershipRequest
@@ -285,7 +286,11 @@ def _create_owned_vehicle(
             is_primary=not has_primary,
         )
         if inventory.availability != AvailabilityStatus.sold:
-            inventory.availability = AvailabilityStatus.sold
+            # Same door: a waiting subscriber is told to stop waiting.
+            # Not strict — approving a claim must not fail on a mail outage.
+            inventory_service.set_availability(
+                db, inventory, AvailabilityStatus.sold, strict_notify=False
+            )
             inventory.is_published = False
     else:
         owned = OwnedVehicle(

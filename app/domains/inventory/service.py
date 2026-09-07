@@ -1,5 +1,6 @@
 import csv
 import io
+import logging
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from math import ceil
@@ -30,6 +31,8 @@ from app.domains.inventory.schemas import (
 from app.domains.inventory.storage import storage
 from app.domains.shared.enums import AvailabilityStatus, NotificationCategory
 from app.domains.users.models import User
+
+logger = logging.getLogger("elizade.inventory")
 
 # Statuses a public visitor is allowed to see / filter by.
 PUBLIC_AVAILABILITY = (AvailabilityStatus.available, AvailabilityStatus.reserved)
@@ -659,8 +662,27 @@ def update_vehicle(db: Session, vehicle_id: str, payload: VehicleUpdateIn) -> Ve
     if data.get("stock_number"):
         _assert_stock_unique(db, data["stock_number"], exclude_id=vehicle.id)
 
+    # A GUARD, NOT A FIX. `VehicleUpdateIn` exposes no `availability` field
+    # today, so this branch is unreachable and no notification was ever missed
+    # here — I assumed otherwise at first and was wrong.
+    #
+    # It stays because the setattr loop below is blind: the day someone adds
+    # availability to that schema, it would start writing the column without
+    # telling a single Notify Me subscriber, and nothing would fail to say so.
+    # One line now beats rediscovering it from a customer complaint.
+    next_availability = data.pop("availability", None)
+
     for field, value in data.items():
         setattr(vehicle, field, value)
+
+    if next_availability is not None:
+        set_availability(
+            db,
+            vehicle,
+            next_availability
+            if isinstance(next_availability, AvailabilityStatus)
+            else _parse_availability(next_availability),
+        )
 
     # Stamp a publish time when a listing is published and none is set.
     if data.get("is_published") is True and vehicle.published_at is None:
@@ -671,15 +693,68 @@ def update_vehicle(db: Session, vehicle_id: str, payload: VehicleUpdateIn) -> Ve
     return _to_admin_detail(vehicle)
 
 
+def set_availability(
+    db: Session,
+    vehicle: Vehicle,
+    next_status: AvailabilityStatus,
+    *,
+    strict_notify: bool = True,
+) -> bool:
+    """Change a vehicle's availability AND tell anyone waiting on it.
+
+    THE ONE WAY TO MOVE THIS COLUMN. Notify Me worked, but only through the
+    dedicated admin status endpoint — and that was never the only door:
+
+      * `update_vehicle` (the general admin PATCH) writes availability with a
+        blind `setattr` loop, so an admin who changed it while editing a
+        listing told nobody;
+      * `expire_reservations` returns a lapsed hold to `available`, which is
+        the single moment a waiting customer most wants to hear about, and it
+        was silent.
+
+    Subscribers were therefore notified or not depending on which screen a
+    member of staff happened to use. Routing every assignment through here is
+    what makes that stop being luck.
+
+    `strict_notify` decides who a delivery failure belongs to.
+
+    `_notify_availability_subscribers` deliberately lets delivery errors abort
+    the enclosing transaction, so a subscription is never closed without a
+    notification actually going out. That is right for an admin acting on a
+    screen — the write fails visibly and they retry.
+
+    It is WRONG anywhere the availability change matters more than the alert.
+    A background sweep releasing lapsed holds must not leave a dozen cars
+    locked because Postmark was briefly down, and a customer's reservation
+    must not fail for the same reason. Those callers pass False: the change
+    stands, the subscription stays open, and the miss is logged.
+
+    Returns whether the status actually changed. Does not commit — the caller
+    owns the transaction.
+    """
+    previous = vehicle.availability
+    if previous == next_status:
+        return False
+    vehicle.availability = next_status
+    if strict_notify:
+        _notify_availability_subscribers(db, vehicle, previous, next_status)
+    else:
+        try:
+            _notify_availability_subscribers(db, vehicle, previous, next_status)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "availability alert failed for vehicle %s (%s -> %s); the status "
+                "change stands and subscriptions remain open",
+                vehicle.id, previous.value, next_status.value,
+            )
+    return True
+
+
 def update_vehicle_status(
     db: Session, vehicle_id: str, payload: VehicleStatusUpdateIn
 ) -> VehicleAdminDetailOut:
     vehicle = _get_admin_vehicle(db, vehicle_id)
-    previous = vehicle.availability
-    next_status = _parse_availability(payload.availability)
-    vehicle.availability = next_status
-    if previous != next_status:
-        _notify_availability_subscribers(db, vehicle, previous, next_status)
+    set_availability(db, vehicle, _parse_availability(payload.availability))
     db.commit()
     db.refresh(vehicle)
     return _to_admin_detail(vehicle)
