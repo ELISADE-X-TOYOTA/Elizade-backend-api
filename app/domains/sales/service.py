@@ -17,6 +17,7 @@ from app.domains.sales.schemas import (
     ReservationCreateIn,
     ReservationOut,
     TestDriveCreateIn,
+    TestDriveStatusActionIn,
     TestDriveOut,
     TradeInCreateIn,
     TradeInOut,
@@ -397,3 +398,106 @@ def submit_trade_in(db: Session, user: User, payload: TradeInCreateIn) -> TradeI
     db.commit()
     db.refresh(row)
     return TradeInOut.from_model(row)
+
+
+#: Which transitions are legal. A completed or cancelled booking is finished;
+#: reopening one would resurrect a slot the branch has already given away.
+_TEST_DRIVE_TERMINAL = (TestDriveStatus.completed, TestDriveStatus.cancelled)
+
+
+def _load_test_drive(db: Session, booking_id: str) -> TestDriveBooking:
+    booking = (
+        db.query(TestDriveBooking)
+        .options(joinedload(TestDriveBooking.vehicle), joinedload(TestDriveBooking.branch))
+        .filter(TestDriveBooking.id == booking_id)
+        .one_or_none()
+    )
+    if booking is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Test drive not found")
+    return booking
+
+
+def _test_drive_context(booking: TestDriveBooking) -> dict:
+    return {
+        "vehicle_label": _vehicle_label(booking.vehicle) if booking.vehicle else "your vehicle",
+        "when": booking.scheduled_at.strftime("%d %b at %H:%M"),
+        "branch": booking.branch.name if booking.branch else "your branch",
+    }
+
+
+def change_test_drive_status(
+    db: Session, booking_id: str, payload: TestDriveStatusActionIn
+) -> TestDriveOut:
+    """Staff confirm / cancel / complete a test drive.
+
+    THIS DID NOT EXIST. There was no staff endpoint for test drives of any
+    kind, so `status` stayed `requested` for the life of the booking and the
+    customer's own screen had to fall back to the linked lead's stage to show
+    anything at all. It is also why `TEST_DRIVE_CONFIRMED` and
+    `TEST_DRIVE_CANCELLED` sat in the catalogue having never once been sent —
+    the events were written, and nothing could reach them.
+    """
+    booking = _load_test_drive(db, booking_id)
+
+    if booking.status in _TEST_DRIVE_TERMINAL:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"This test drive is already {booking.status.value}.",
+        )
+
+    action = payload.action
+    if action == "confirm":
+        booking.status = TestDriveStatus.confirmed
+    elif action == "cancel":
+        booking.status = TestDriveStatus.cancelled
+    else:
+        booking.status = TestDriveStatus.completed
+
+    db.commit()
+    db.refresh(booking)
+    booking = _load_test_drive(db, booking_id)
+
+    # After the commit: the status change stands whether or not the customer
+    # can be reached.
+    if action == "confirm":
+        safe_notify(
+            db,
+            user=booking.user,
+            event=catalog.TEST_DRIVE_CONFIRMED,
+            context=_test_drive_context(booking),
+        )
+    elif action == "cancel":
+        safe_notify(
+            db,
+            user=booking.user,
+            event=catalog.TEST_DRIVE_CANCELLED,
+            context={"vehicle_label": _test_drive_context(booking)["vehicle_label"]},
+        )
+    return TestDriveOut.from_model(booking)
+
+
+def cancel_my_test_drive(db: Session, user: User, booking_id: str) -> TestDriveOut:
+    """A customer calling off their own test drive.
+
+    Service appointments have had customer cancel and reschedule since they
+    were built; test drives had neither, so a customer who could no longer make
+    it had no way to say so and the branch kept the slot held.
+    """
+    booking = _load_test_drive(db, booking_id)
+    if booking.user_id != user.id:
+        # 404 rather than 403: whether someone else's booking exists is not
+        # this customer's business.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Test drive not found")
+    if booking.status in _TEST_DRIVE_TERMINAL:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"This test drive is already {booking.status.value}.",
+        )
+
+    booking.status = TestDriveStatus.cancelled
+    db.commit()
+    booking = _load_test_drive(db, booking_id)
+
+    # No notification back to the customer who just pressed cancel — they were
+    # there. The branch learns from the booking list.
+    return TestDriveOut.from_model(booking)

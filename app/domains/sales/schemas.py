@@ -198,3 +198,18 @@ class TradeInOut(BaseModel):
             estimatedValue=str(row.estimated_value) if row.estimated_value is not None else None,
             createdAt=row.created_at.isoformat(),
         )
+
+
+class TestDriveStatusActionIn(BaseModel):
+    """Staff transition on a test-drive booking.
+
+    Test drives had NO staff endpoint at all — only list and create, both for
+    the customer. `TestDriveBooking.status` was written once as `requested`
+    and nothing in the system could ever change it, which is why the two
+    catalogued events `TEST_DRIVE_CONFIRMED` and `TEST_DRIVE_CANCELLED` had
+    never fired: there was no action to fire them from.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    action: str = Field(pattern="^(confirm|cancel|complete)$")
