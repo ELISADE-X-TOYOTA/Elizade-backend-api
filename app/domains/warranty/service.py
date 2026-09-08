@@ -24,6 +24,7 @@ from app.domains.warranty.policy import (
     DEFAULT_COVERAGE_DETAILS,
     battery_warranty_status,
     is_within_basic_warranty,
+    is_within_certificate_cover,
     warranty_end_from_in_service,
 )
 from app.domains.notifications import catalog
@@ -509,10 +510,8 @@ def check_eligibility(db: Session, user_id: str, owned_vehicle_id: str) -> dict:
     if not vehicle:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found")
 
-    eligible, reason = is_within_basic_warranty(
-        in_service_date=vehicle.purchase_date,
-        current_mileage=vehicle.mileage,
-    )
+    # The certificate is read FIRST, because it is the authoritative record of
+    # cover and everything below depends on it.
     cert = (
         db.query(WarrantyCertificate)
         .filter(
@@ -522,20 +521,53 @@ def check_eligibility(db: Session, user_id: str, owned_vehicle_id: str) -> dict:
         .order_by(WarrantyCertificate.created_at.desc())
         .first()
     )
+
     coverage_end = None
     if cert:
         coverage_end = cert.coverage_end
     elif vehicle.purchase_date:
         coverage_end = warranty_end_from_in_service(vehicle.purchase_date)
 
+    """
+    ELIGIBILITY FOLLOWS THE CERTIFICATE WHEN THERE IS ONE.
+
+    This used to be derived solely from `vehicle.purchase_date`, which is null
+    on 23 of the 25 owned vehicles in production — including the vehicles
+    behind 8 of the 10 ACTIVE warranty certificates. Those customers were
+    shown a certificate covering them until 2028 and then refused a claim
+    with "In-service date is not recorded for this vehicle", while this very
+    function was reading the certificate two lines below to fill in
+    `coverageEnd`. The record existed; the eligibility check just ignored it.
+
+    Deriving from the certificate also fixes `extended` cover, whose window is
+    longer than the basic 36 months and which re-derivation silently cut back
+    to the basic term.
+    """
+    if cert is not None:
+        eligible, reason = is_within_certificate_cover(
+            coverage_end=cert.coverage_end,
+            current_mileage=vehicle.mileage,
+        )
+    else:
+        eligible, reason = is_within_basic_warranty(
+            in_service_date=vehicle.purchase_date,
+            current_mileage=vehicle.mileage,
+        )
+
+    # `coverage_start` is the in-service date that was used when the
+    # certificate was issued, so it is the honest answer for a vehicle whose
+    # own purchase date was never captured — better than reporting null and
+    # implying nothing is known.
+    effective_in_service = vehicle.purchase_date or (cert.coverage_start if cert else None)
+
     battery_status, battery_eligible, battery_free_end, battery_partial_end = battery_warranty_status(
-        in_service_date=vehicle.purchase_date,
+        in_service_date=effective_in_service,
     )
 
     return {
         "eligible": eligible,
         "reason": reason,
-        "inServiceDate": vehicle.purchase_date.isoformat() if vehicle.purchase_date else None,
+        "inServiceDate": effective_in_service.isoformat() if effective_in_service else None,
         "coverageEnd": coverage_end.isoformat() if coverage_end else None,
         "mileageLimitKm": BASIC_WARRANTY_KM,
         "warrantyMonths": BASIC_WARRANTY_MONTHS,
