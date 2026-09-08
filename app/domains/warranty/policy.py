@@ -71,6 +71,40 @@ def is_within_basic_warranty(
     return True, None
 
 
+def is_within_certificate_cover(
+    *,
+    coverage_end: datetime | None,
+    current_mileage: int,
+    as_of: datetime | None = None,
+) -> tuple[bool, str | None]:
+    """Eligibility judged against an ISSUED certificate rather than re-derived.
+
+    A certificate is the record that cover was granted and when it runs to.
+    `is_within_basic_warranty` re-derives that from the vehicle's purchase
+    date, which is null on almost every owned vehicle in production — so a
+    customer holding an active certificate valid until 2028 was refused a
+    claim on the grounds that we did not know when cover began, while holding
+    the document that says exactly that.
+
+    It also fixes `extended` certificates, whose window is longer than the
+    basic 36 months and which re-derivation would have cut short.
+
+    The mileage cap still applies: it is a limit on the cover, not on our
+    knowledge of it, and no certificate overrides distance travelled.
+    """
+    if coverage_end is None:
+        return False, "In-service date is not recorded for this vehicle"
+
+    now = as_of or datetime.now(timezone.utc)
+    if now > _as_utc(coverage_end):
+        return False, "Warranty cover for this vehicle has expired"
+
+    if current_mileage > BASIC_WARRANTY_KM:
+        return False, f"Mileage exceeds warranty limit ({BASIC_WARRANTY_KM:,} km)"
+
+    return True, None
+
+
 def battery_free_end_from_in_service(in_service: datetime) -> datetime:
     return add_months(_as_utc(in_service), BATTERY_FREE_MONTHS)
 

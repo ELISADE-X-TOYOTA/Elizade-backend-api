@@ -11,6 +11,7 @@ from app.domains.sales.schemas import (
     ReservationOut,
     TestDriveCreateIn,
     TestDriveOut,
+    TestDriveStatusActionIn,
     TradeInCreateIn,
     TradeInOut,
 )
@@ -97,3 +98,18 @@ def submit_trade_in(
     db: Session = Depends(get_db),
 ) -> TradeInOut:
     return service.submit_trade_in(db, current_user, payload)
+
+
+@router.post("/test-drives/{booking_id}/cancel", response_model=TestDriveOut)
+def cancel_my_test_drive(
+    booking_id: str,
+    current_user: CustomerUser,
+    db: Session = Depends(get_db),
+) -> TestDriveOut:
+    """Call off your own test drive.
+
+    Service appointments have had cancel and reschedule since they were built;
+    test drives had neither, so a customer who could no longer make it had no
+    way to say so and the branch went on holding the slot.
+    """
+    return service.cancel_my_test_drive(db, current_user, booking_id)

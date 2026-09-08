@@ -4,6 +4,10 @@ import re
 
 from fastapi import HTTPException, status
 
+#: The LOCAL-DISK prefix only. Kept because records written before the move to
+#: object storage still reference it — it is a legacy fallback, NOT the answer
+#: to "where do uploads live". Ask the storage backend that; see
+#: `_document_url_prefixes`.
 DOCUMENT_URL_PREFIX = "/media/documents/"
 MAX_DOCUMENT_ATTACHMENTS = 5
 MAX_DOCUMENT_BYTES = 10 * 1024 * 1024
@@ -190,6 +194,62 @@ def upload_extension(filename: str | None, content_type: str | None) -> str:
     )
 
 
+def _document_url_prefixes() -> tuple[str, ...]:
+    """Prefixes a stored-document URL is allowed to start with.
+
+    READ FROM THE STORAGE BACKENDS, never hardcoded, because the uploader and
+    the validator must agree and did not. `normalize_document_urls` was pinned
+    to the local-disk path `/media/documents/`, which is correct only while
+    storage IS local disk. Once Spaces credentials are configured — as they are
+    in production — every upload endpoint starts issuing
+    `https://<bucket>.<region>.digitaloceanspaces.com/<folder>/<key>`, and this
+    function rejected every one of them. The file uploaded fine, then the
+    submission carrying it died on "Invalid attachment URL": the API refusing a
+    URL it had itself minted seconds earlier.
+
+    That took out four customer features at once, in production only, while
+    every local test passed — trade-in valuations, warranty claim evidence,
+    service-appointment photos and VIN ownership documents. Support hit the
+    identical bug earlier and was fixed by deriving its prefix this way; the
+    other four kept the hardcoded copy. This is that fix, applied where it
+    should have been applied in the first place.
+
+    ALL CUSTOMER FOLDERS ARE ACCEPTED, not just the one matching the feature
+    being submitted. The security property that matters is unchanged: the URL
+    must be one this API issued into storage it controls, so the field cannot
+    become a sink for `https://attacker.example/pixel.png`. Which FOLDER it
+    landed in is an operational boundary — retention rules, bulk purges — and
+    not an authorization one; every folder here holds uploads made by the same
+    authenticated customer through an endpoint that already authorised them.
+    Enforcing it here would only re-break the same class of bug the moment a
+    client posts to a sibling upload endpoint, which is exactly what the app
+    does today for trade-in photos.
+
+    Read lazily, not at import: `uploads` builds its storage instances at
+    module load and imports from this module, so a module-scope import is a
+    cycle.
+    """
+    from app.services import uploads  # noqa: PLC0415
+
+    prefixes: list[str] = []
+    for storage in (
+        uploads.trade_in_storage,
+        uploads.warranty_storage,
+        uploads.ownership_storage,
+        uploads.support_storage,
+        uploads.avatar_storage,
+    ):
+        prefix = getattr(storage, "url_prefix", "")
+        if prefix and prefix not in prefixes:
+            prefixes.append(prefix)
+    # Rows created before the move to object storage still reference local-disk
+    # URLs. Rejecting those would break editing or resubmitting historical
+    # records for no gain.
+    if DOCUMENT_URL_PREFIX not in prefixes:
+        prefixes.append(DOCUMENT_URL_PREFIX)
+    return tuple(prefixes)
+
+
 def normalize_document_urls(urls: list[str] | None) -> list[str]:
     if not urls:
         return []
@@ -198,10 +258,25 @@ def normalize_document_urls(urls: list[str] | None) -> list[str]:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"At most {MAX_DOCUMENT_ATTACHMENTS} attachments allowed",
         )
+    prefixes = _document_url_prefixes()
     out: list[str] = []
     for raw in urls:
-        url = raw.strip()
-        key = url[len(DOCUMENT_URL_PREFIX) :] if url.startswith(DOCUMENT_URL_PREFIX) else ""
+        url = (raw or "").strip()
+        # A blank entry is a client artefact, not an attachment. Failing the
+        # whole submission over one is punishing the customer for a trailing
+        # empty slot in someone else's array.
+        if not url:
+            continue
+        prefix = next((p for p in prefixes if url.startswith(p)), None)
+        if prefix is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                # Names the cause. The old message said only "Invalid
+                # attachment URL", which told a customer who had just filled in
+                # a whole valuation form precisely nothing.
+                detail="Attachments must be uploaded through this app before they can be submitted",
+            )
+        key = url[len(prefix) :]
         if not _SAFE_KEY.fullmatch(key) or "/" in key or "\\" in key or ".." in key:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid attachment URL")
         if url not in out:

@@ -206,9 +206,23 @@ def evaluate_rule(db: Session, rule_id: str, *, now: datetime | None = None) -> 
 
     if rule.trigger_key == "service_due_soon":
         stages = parse_stages(config.get("stages"))
-        # `days_before` is still honoured as the widest window so existing
-        # rules keep working, but the stages decide who is actually told.
-        window = int(config.get("days_before", max(stages)))
+        """
+        THE WINDOW CANNOT BE NARROWER THAN THE WIDEST STAGE.
+
+        This read `int(config.get("days_before", max(stages)))` — the widest
+        stage was used only when `days_before` was ABSENT. Production's live
+        rule has `days_before: 14` and no `stages` key, so stages fell back to
+        the default (30, 7, 1, 0) while the query window stayed 14. A vehicle
+        30 days out was never selected, so the 30-day step could not fire for
+        anyone, ever. Production's dispatch log shows exactly that: stages 7,
+        0 and -7, and not a single 30.
+
+        `days_before` still widens the window when an operator sets it beyond
+        the stages; it can no longer silently disable one. A stage that is
+        configured is a stage that gets queried — otherwise the cadence
+        quietly means something other than what it says.
+        """
+        window = max(int(config.get("days_before") or 0), max(stages))
         now = now or datetime.now(timezone.utc)
         pairs = _users_for_service_due_soon(db, days=window, now=now)
         matched = len({user.id for user, _ in pairs})

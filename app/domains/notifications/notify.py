@@ -122,8 +122,22 @@ def notify(
     event: EventSpec,
     context: dict[str, Any] | None = None,
     commit: bool = True,
+    email_text: str | None = None,
+    email_html: str | None = None,
 ) -> NotifyResult:
-    """Render `event` for `user` and deliver it on the event's channels."""
+    """Render `event` for `user` and deliver it on the event's channels.
+
+    `email_text` / `email_html` let a caller send a DOCUMENT where the catalog
+    body is only a nudge. The quotation email is the case that forced this: its
+    body was "We've prepared your quote for the 2024 Corolla. It's valid until
+    21 September 2026." — accurate, and containing no quote. A customer who
+    opened it still had nothing, having been promised "a formal quotation".
+
+    Only the body is overridden. The subject stays `rendered.title` so the copy
+    for an event lives in the catalog and nowhere else, and everything that
+    makes this function worth calling is unchanged: preference gating, the
+    in-app record, and a `notification_deliveries` row per attempt.
+    """
     ctx = context or {}
 
     try:
@@ -187,8 +201,9 @@ def notify(
                 email_service.send_notification(
                     to_email=user.email,
                     subject=rendered.title,
-                    body=rendered.body,
+                    body=email_text or rendered.body,
                     category=rendered.category.value,
+                    html_body=email_html,
                 )
             elif channel == catalog.PUSH:
                 push_service.send(
@@ -245,6 +260,8 @@ def safe_notify(
     user: User | None,
     event: EventSpec,
     context: dict[str, Any] | None = None,
+    email_text: str | None = None,
+    email_html: str | None = None,
 ) -> None:
     """`notify` that never raises and never rolls the caller back.
 
@@ -254,7 +271,14 @@ def safe_notify(
     if user is None:
         return
     try:
-        notify(db, user=user, event=event, context=context)
+        notify(
+            db,
+            user=user,
+            event=event,
+            context=context,
+            email_text=email_text,
+            email_html=email_html,
+        )
     except Exception:  # noqa: BLE001
         logger.exception("notification failed for event %s", event.key)
         try:

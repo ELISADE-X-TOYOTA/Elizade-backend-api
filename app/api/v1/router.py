@@ -17,6 +17,7 @@ from app.domains.notifications.router import router as notifications_router
 from app.domains.ownership.admin_router import router as ownership_admin_router
 from app.domains.ownership.customer_router import router as ownership_customer_router
 from app.domains.sales.customer_router import router as sales_customer_router
+from app.domains.sales.staff_router import router as sales_staff_router
 from app.domains.service.customer_router import router as service_customer_router
 from app.domains.service.router import router as service_router
 from app.domains.service.board_public_router import router as service_board_public_router
@@ -55,4 +56,5 @@ api_router.include_router(service_board_public_router)
 api_router.include_router(service_router)
 api_router.include_router(leads_customer_router)
 api_router.include_router(sales_customer_router)
+api_router.include_router(sales_staff_router)
 api_router.include_router(service_customer_router)

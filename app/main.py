@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -7,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from app.core.config import get_settings
+from app.services.email import mail_sender_warning
 from app.core.database import Base, engine, SessionLocal
 from app.core.deps import CurrentUser
 from app.core.migrations import run_startup_migrations
@@ -28,6 +30,13 @@ async def lifespan(_: FastAPI):
     if problems:
         raise RuntimeError("Invalid reviewer configuration:\n  - " + "\n  - ".join(problems))
     review_bypass.log_status()
+
+    # The From address is not a refusal condition — see `mail_sender_warning`.
+    # Correcting it needs DNS and a verified Postmark sender first, so this
+    # says so at boot instead of letting a customer be the one who notices.
+    sender_warning = mail_sender_warning()
+    if sender_warning:
+        logging.getLogger("elizade.email").warning("[EMAIL] %s", sender_warning)
 
     Base.metadata.create_all(bind=engine)
     run_startup_migrations(engine)
