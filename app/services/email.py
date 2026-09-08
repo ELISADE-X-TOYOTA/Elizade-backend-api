@@ -305,3 +305,39 @@ def build_email_service() -> EmailService:
 
 
 email_service: EmailService = build_email_service()
+
+
+def mail_sender_warning() -> str | None:
+    """Flag a From address that does not belong to the brand it signs off as.
+
+    Every transactional email is signed "Elizade Nigeria Limited" and sent
+    from whatever `SMTP_FROM_EMAIL` happens to be. In production that was a
+    `meristemng.com` address — the build vendor's domain — so customers
+    received Elizade sign-in codes from Meristem, and QA quite reasonably
+    filed it as a defect.
+
+    A WARNING, NOT A REFUSAL. The address has to be a verified sender in
+    Postmark with SPF and DKIM published, so it cannot be corrected by editing
+    a variable alone: swapping it ahead of the DNS work stops every OTP going
+    out, which is far worse than the wrong name in the From line. Booting and
+    saying so lets the mismatch be fixed deliberately instead of discovered by
+    a customer.
+    """
+    settings = get_settings()
+    sender = (settings.smtp_from_email or "").strip().lower()
+    if "@" not in sender:
+        return "SMTP_FROM_EMAIL is not a valid address; transactional mail will fail."
+
+    sender_domain = sender.rsplit("@", 1)[1]
+    support = (settings.support_email or "").strip().lower()
+    brand_domain = support.rsplit("@", 1)[1] if "@" in support else ""
+    if not brand_domain or sender_domain == brand_domain:
+        return None
+
+    return (
+        f"Outgoing mail is sent from '{sender_domain}' but the brand domain is "
+        f"'{brand_domain}'. Customers will see the wrong sender on OTP and "
+        f"notification email. Fix by verifying a {brand_domain} sender in "
+        f"Postmark (SPF + DKIM) and then setting SMTP_FROM_EMAIL — changing the "
+        f"variable first will stop mail delivery."
+    )
