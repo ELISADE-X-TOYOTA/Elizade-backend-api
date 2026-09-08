@@ -185,10 +185,17 @@ def test_only_admin_can_create_rules(client, staff_headers):
 
 
 def test_evaluate_service_due_soon_matches_and_dispatches(client, admin_headers, db_session):
+    """One vehicle inside the cadence, one outside it entirely.
+
+    The out-of-range vehicle used to be 30 days out and was called `not_due`.
+    That encoded the bug: 30 days is the FIRST step of the documented 30/7/1/0
+    cadence, so that customer should have been reminded and the assertion
+    below said they must not be. 60 days is genuinely outside every step.
+    """
     due_soon = _customer_with_prefs(db_session, "8100000101", "due@elizade.test", marketing_opt_in=False)
     not_due = _customer_with_prefs(db_session, "8100000102", "ok@elizade.test", marketing_opt_in=False)
     _owned_vehicle(db_session, due_soon, days_until_service=5)
-    _owned_vehicle(db_session, not_due, days_until_service=30)
+    _owned_vehicle(db_session, not_due, days_until_service=60)
 
     rule = NotificationRule(
         name="Due soon",

@@ -110,6 +110,27 @@ def create_test_drive(db: Session, user: User, payload: TestDriveCreateIn) -> Te
         .filter(TestDriveBooking.id == booking.id)
         .one()
     )
+
+    # BOOKING A TEST DRIVE SENT NOTHING AT ALL.
+    #
+    # The only test-drive event in the catalog was `TEST_DRIVE_CONFIRMED`, and
+    # nothing fires it because there is no staff endpoint to confirm a test
+    # drive — so a customer chose a slot, submitted, and heard nothing, from
+    # anywhere, ever. This acknowledges the booking they actually made.
+    #
+    # "Requested", not "confirmed": the row is created as `requested` and no
+    # human has seen it yet. After the commit, so a notification failure
+    # cannot cost the customer the booking.
+    safe_notify(
+        db,
+        user=user,
+        event=catalog.TEST_DRIVE_REQUESTED,
+        context={
+            "vehicle_label": _vehicle_label(vehicle),
+            "when": scheduled.strftime("%d %b at %H:%M"),
+            "branch": branch.name,
+        },
+    )
     return TestDriveOut.from_model(booking)
 
 

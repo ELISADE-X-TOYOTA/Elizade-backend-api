@@ -74,6 +74,30 @@ CONTACT_DETAILS_CHANGED = _spec(
 
 # ── Sales ────────────────────────────────────────────────────────────────
 
+#: Sent the moment the CUSTOMER books, not when staff act on it.
+#:
+#: Booking a test drive produced no notification of any kind. The only sales
+#: event in the catalog was `TEST_DRIVE_CONFIRMED`, which nothing fires
+#: because there is no staff endpoint to confirm a test drive — so a customer
+#: picked a slot, submitted, and heard nothing at all.
+#:
+#: The wording is deliberately "requested", not "confirmed". The booking is
+#: created with status `requested` and no human has looked at it yet; telling
+#: someone their drive is confirmed is how a customer arrives at a showroom
+#: that is not expecting them.
+TEST_DRIVE_REQUESTED = _spec(
+    key="sales.test_drive_requested",
+    category=NotificationCategory.sales,
+    title="Test drive requested",
+    body="We've got your request to drive the {vehicle_label} on {when} at {branch}. We'll confirm shortly.",
+    deep_link="/(tabs)/bookings",
+    # In-app and push only. The confirmation that follows carries the email —
+    # two emails for one booking, the first of which says "we'll get back to
+    # you", is noise.
+    channels=(IN_APP, PUSH),
+    requires=("vehicle_label", "when", "branch"),
+)
+
 TEST_DRIVE_CONFIRMED = _spec(
     key="sales.test_drive_confirmed",
     category=NotificationCategory.sales,
@@ -125,6 +149,19 @@ WATCHED_MODEL_AVAILABLE = _spec(
 )
 
 # ── Service ──────────────────────────────────────────────────────────────
+
+#: The customer's own booking, acknowledged. `SERVICE_APPOINTMENT_CONFIRMED`
+#: fires only from the staff `confirm` action, so booking a service was as
+#: silent as booking a test drive until someone in the branch got to it.
+SERVICE_APPOINTMENT_REQUESTED = _spec(
+    key="service.appointment_requested",
+    category=NotificationCategory.service,
+    title="Service booking received",
+    body="We've got your {service_type} booking for the {vehicle_label} on {when} at {branch}. We'll confirm shortly.",
+    deep_link="/(tabs)/service",
+    channels=(IN_APP, PUSH),
+    requires=("service_type", "vehicle_label", "when", "branch"),
+)
 
 SERVICE_APPOINTMENT_CONFIRMED = _spec(
     key="service.appointment_confirmed",
@@ -296,11 +333,13 @@ TICKET_RESOLVED = _spec(
 ALL_EVENTS: tuple[EventSpec, ...] = (
     NEW_DEVICE_SIGN_IN,
     CONTACT_DETAILS_CHANGED,
+    TEST_DRIVE_REQUESTED,
     TEST_DRIVE_CONFIRMED,
     TEST_DRIVE_CANCELLED,
     QUOTATION_ISSUED,
     TRADE_IN_VALUED,
     WATCHED_MODEL_AVAILABLE,
+    SERVICE_APPOINTMENT_REQUESTED,
     SERVICE_APPOINTMENT_CONFIRMED,
     SERVICE_REMINDER_DUE,
     EXTRA_WORK_NEEDS_APPROVAL,

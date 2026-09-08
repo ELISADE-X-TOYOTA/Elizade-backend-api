@@ -768,6 +768,24 @@ def create_customer_appointment(
         .filter(ServiceAppointment.id == appt.id)
         .one()
     )
+
+    # Acknowledge the customer's own booking.
+    #
+    # `SERVICE_APPOINTMENT_CONFIRMED` fires only from the staff `confirm`
+    # action, so booking a service was as silent as booking a test drive:
+    # nothing at all until someone in the branch got round to it. After the
+    # commit, so a notification failure cannot cost the booking.
+    safe_notify(
+        db,
+        user=user,
+        event=catalog.SERVICE_APPOINTMENT_REQUESTED,
+        context={
+            "service_type": service_type.value.replace("_", " ").title(),
+            "vehicle_label": _vehicle_label(vehicle),
+            "when": scheduled.strftime("%d %b at %H:%M"),
+            "branch": branch.name,
+        },
+    )
     return CustomerAppointmentListItemOut.from_model(loaded)
 
 
