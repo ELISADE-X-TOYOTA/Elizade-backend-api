@@ -45,6 +45,7 @@ from app.domains.service.models import (
 from app.domains.support.models import SlaConfig, SupportTicket, TicketMessage
 from app.domains.users.models import OtpChallenge, RefreshToken, User
 from app.domains.warranty.models import RecallCampaign, RecallVehicle, WarrantyCertificate, WarrantyClaim
+from app.domains.telemetry.models import ClientErrorReport  # noqa: F401
 
 __all__ = [
     "AuditLog",
