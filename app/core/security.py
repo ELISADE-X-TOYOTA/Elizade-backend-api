@@ -24,11 +24,28 @@ def normalize_email(email: str) -> str:
 
 
 def placeholder_phone_for_email(email: str) -> tuple[str, str]:
-    """Synthetic phone fields for email-only accounts (users.phone is still required)."""
+    """Synthetic phone fields for email-only accounts (users.phone is still required).
+
+    DERIVED FROM THE EMAIL, which makes it stale the moment the email changes —
+    see `is_placeholder_phone`. The value stays derived rather than random so
+    an account created twice from the same address is caught by the uniqueness
+    constraint instead of silently duplicating.
+    """
     norm = normalize_email(email)
     digest = hashlib.sha256(norm.encode()).hexdigest()[:15]
     phone_norm = f"e{digest}"
     return phone_norm, norm
+
+
+def is_placeholder_phone(phone_normalized: str | None, email: str) -> bool:
+    """Is this stored phone the synthetic one derived from `email`?
+
+    Used to tell a REAL phone number, which must never be rewritten, from a
+    stand-in that is only there because the column is NOT NULL.
+    """
+    if not phone_normalized:
+        return False
+    return phone_normalized == placeholder_phone_for_email(email)[0]
 
 
 def _otp_digest(code: str) -> str:
