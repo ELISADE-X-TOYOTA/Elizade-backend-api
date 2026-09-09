@@ -2,7 +2,8 @@ import logging
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.core.security import is_placeholder_phone, placeholder_phone_for_email
+from app.core.config import get_settings
+from app.core.security import is_placeholder_phone, normalize_email, placeholder_phone_for_email
 from app.domains.notifications import catalog
 from app.domains.notifications.notify import safe_notify
 from app.domains.users.models import DEFAULT_PREFERENCES, User, UserRole
@@ -36,45 +37,28 @@ def update_profile(db: Session, user: User, payload: UserProfileUpdateIn) -> Use
     previous_email = user.email
     email_changed = False
 
-    if payload.email and payload.email != user.email:
-        owner = db.query(User).filter(User.email == payload.email).one_or_none()
-        if owner and owner.id != user.id:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already in use")
-
+    if payload.email and normalize_email(payload.email) != normalize_email(user.email or ""):
         """
-        THE PLACEHOLDER PHONE HAS TO MOVE WITH THE EMAIL.
+        THE REGISTERED EMAIL IS LOCKED, and the lock is here rather than only
+        in the app.
 
-        Email-only accounts get a synthetic `phone_normalized` derived from the
-        address, because the column is NOT NULL. It was derived once at
-        registration and never revisited, so changing your email left it
-        encoding the OLD address — and the column is UNIQUE.
+        This address IS the credential: the sign-in code goes to it, so whoever
+        controls it controls the account. Allowing it to change from an
+        ordinary authenticated session means a borrowed or hijacked session can
+        transfer the account outright, and the real owner finds out from an
+        alert sent to a mailbox they no longer read.
 
-        The consequence was a 500 on somebody else's registration. Anyone
-        signing up with the address you moved away from produced the same
-        placeholder, hit `duplicate key value violates unique constraint
-        ix_users_phone_normalized`, and got "Elizade services are temporarily
-        unavailable" — an outage message for a stale row. Telemetry caught it
-        twice on /auth/otp/request.
-
-        Only a PLACEHOLDER is rewritten. A customer who has given a real phone
-        number keeps it; that is their number, not a derived artefact.
+        A read-only field in the UI is not a control — anything can call the
+        API. Support can still do it, deliberately and with identity checked,
+        through `change_email_verified` below.
         """
-        if is_placeholder_phone(user.phone_normalized, user.email):
-            new_norm, new_display = placeholder_phone_for_email(payload.email)
-            # If the new address somehow already has a placeholder in use, leave
-            # the old one rather than trading one collision for another; the
-            # address itself is already proven free by the check above.
-            taken = (
-                db.query(User)
-                .filter(User.phone_normalized == new_norm, User.id != user.id)
-                .first()
-            )
-            if taken is None:
-                user.phone_normalized = new_norm
-                user.phone_display = new_display
-
-        user.email = payload.email
-        email_changed = True
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Your registered email cannot be changed here. "
+                f"Contact {get_settings().support_email} and we will verify it with you."
+            ),
+        )
 
     if payload.first_name is not None:
         user.first_name = _require_non_empty(payload.first_name, "First name")
@@ -108,6 +92,52 @@ def update_profile(db: Session, user: User, payload: UserProfileUpdateIn) -> Use
         # off. `notify` addresses a User, so this goes direct.
         _alert_previous_email(previous_email, user)
 
+    return UserProfileOut.from_user(user)
+
+
+def change_email_verified(db: Session, user: User, new_email: str) -> UserProfileOut:
+    """Move an account to a new address AFTER identity has been established.
+
+    The customer-facing `update_profile` refuses this outright, because the
+    email is the sign-in credential. This is the path for support to use once
+    they have verified the person — and it is a real function rather than a
+    manual database edit, so the checks and the alerts cannot be skipped by
+    whoever is in a hurry.
+
+    Everything the old inline path did still happens here: the address must be
+    free, the synthetic placeholder phone moves with the email (leaving it
+    behind is what made somebody else's registration fail with a 500), the
+    account is told, and the address being REPLACED is warned — that one is the
+    point, because it is the mailbox an attacker has just cut off.
+    """
+    previous_email = user.email
+    normalised = normalize_email(new_email)
+
+    if normalised == normalize_email(previous_email or ""):
+        return UserProfileOut.from_user(user)
+
+    owner = db.query(User).filter(User.email == normalised).one_or_none()
+    if owner and owner.id != user.id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already in use")
+
+    if is_placeholder_phone(user.phone_normalized, user.email or ""):
+        new_norm, new_display = placeholder_phone_for_email(normalised)
+        taken = (
+            db.query(User)
+            .filter(User.phone_normalized == new_norm, User.id != user.id)
+            .first()
+        )
+        if taken is None:
+            user.phone_normalized = new_norm
+            user.phone_display = new_display
+
+    user.email = normalised
+    db.commit()
+    db.refresh(user)
+
+    safe_notify(db, user=user, event=catalog.CONTACT_DETAILS_CHANGED,
+                context={"field": "email address"})
+    _alert_previous_email(previous_email, user)
     return UserProfileOut.from_user(user)
 
 

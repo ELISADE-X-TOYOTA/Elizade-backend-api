@@ -21,6 +21,22 @@ from app.services.otp import MAX_OTP_ATTEMPTS, create_and_dispatch_otp
 
 logger = logging.getLogger("elizade.auth")
 
+#: Said to anyone whose account has been deactivated, on sign-in OR sign-up.
+#:
+#: Registration used to answer "Account already exists." — true, unhelpful, and
+#: indistinguishable from a plain duplicate. Sign-in said "Contact admin.",
+#: naming a person the customer has no way to reach. Neither told them what had
+#: actually happened or where to go, and a deactivated account is usually the
+#: one case where somebody genuinely needs a human.
+DEACTIVATED_ACCOUNT_MESSAGE = (
+    "This email address is associated with a previously deactivated account. "
+    "Please contact support at {support} to restore it."
+)
+
+
+def _deactivated_message() -> str:
+    return DEACTIVATED_ACCOUNT_MESSAGE.format(support=get_settings().support_email)
+
 settings = get_settings()
 
 
@@ -64,7 +80,7 @@ def request_otp(db: Session, payload: OtpRequestIn) -> OtpRequestOut:
                 detail="No account found for this email. Please register.",
             )
         if not user.is_active:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is deactivated. Contact admin.")
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_deactivated_message())
 
         # The store reviewer's fixed code is already valid, so no challenge is
         # created and no mail is sent. Returning success rather than an error
@@ -83,6 +99,16 @@ def request_otp(db: Session, payload: OtpRequestIn) -> OtpRequestOut:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="First name and last name are required for registration.",
+            )
+        # A DEACTIVATED ACCOUNT IS NOT A DUPLICATE, and saying "Account
+        # already exists" to someone whose account was disabled sends them
+        # round a loop: they cannot register, and signing in tells them
+        # something different. Checked before the duplicate case so the more
+        # specific answer wins.
+        if user and not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=_deactivated_message(),
             )
         if user and user.is_verified:
             raise HTTPException(
@@ -249,7 +275,17 @@ def verify_otp(db: Session, payload: OtpVerifyIn) -> AuthTokenOut:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User not found. Complete registration first.")
 
     user.is_verified = True
-    user.is_active = True
+    """
+    DELIBERATELY NOT `user.is_active = True`.
+
+    This used to reactivate unconditionally, so anyone disabled in the admin
+    portal could simply register again and be back — whatever the deactivation
+    was for. Registration must not be a way to undo a moderation decision.
+
+    `request_otp` now refuses a deactivated account before it gets here, so
+    this is the second line rather than the first; a silent reactivation is
+    exactly the kind of thing that survives if only one gate holds it.
+    """
     user.email = email_norm
     _apply_admin_role(user)
 

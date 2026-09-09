@@ -156,11 +156,11 @@ def test_already_notified_owners_are_not_told_twice(db_session, customer_user, r
 
 
 def test_changing_the_email_alerts_the_account(db_session, customer_user):
+    """Via `change_email_verified` — the customer-facing PATCH now refuses an
+    email change outright, because the address is the sign-in credential."""
     before = _alerts(db_session, customer_user)
 
-    users_service.update_profile(
-        db_session, customer_user, UserProfileUpdateIn(email="moved@elizade.com")
-    )
+    users_service.change_email_verified(db_session, customer_user, "moved@elizade.com")
 
     assert _alerts(db_session, customer_user) == before + 1, (
         "an email change is a security event and must not be silent"
@@ -187,8 +187,6 @@ def test_the_previous_address_is_warned_too(db_session, customer_user, monkeypat
     monkeypatch.setattr(users_service.email_service, "send_notification", capture)
     old = customer_user.email
 
-    users_service.update_profile(
-        db_session, customer_user, UserProfileUpdateIn(email="attacker@elsewhere.com")
-    )
+    users_service.change_email_verified(db_session, customer_user, "attacker@elsewhere.com")
 
     assert old in sent, f"the previous address was never warned; sent to {sent}"

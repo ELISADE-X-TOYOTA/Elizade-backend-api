@@ -86,9 +86,9 @@ def test_an_address_someone_moved_away_from_can_be_registered_again(client, db_s
     assert _register(client, original).status_code == 200
 
     owner = db_session.query(User).filter(User.email == normalize_email(original)).one()
-    users_service.update_profile(
-        db_session, owner, UserProfileUpdateIn(email="now.elsewhere@elizade.com")
-    )
+    # Via the sanctioned path: the customer-facing PATCH now refuses an email
+    # change outright, because the address is the sign-in credential.
+    users_service.change_email_verified(db_session, owner, "now.elsewhere@elizade.com")
 
     again = _register(client, original, first="Second", last="Person")
     assert again.status_code == 200, again.text
@@ -101,7 +101,7 @@ def test_the_placeholder_follows_the_email(client, db_session):
     assert is_placeholder_phone(user.phone_normalized, email)
 
     moved = "somewhere.else@elizade.com"
-    users_service.update_profile(db_session, user, UserProfileUpdateIn(email=moved))
+    users_service.change_email_verified(db_session, user, moved)
     db_session.refresh(user)
 
     assert is_placeholder_phone(user.phone_normalized, moved), (
@@ -115,9 +115,7 @@ def test_a_real_phone_number_is_never_rewritten(db_session, customer_user):
     customer_user.phone_display = "08109998877"
     db_session.commit()
 
-    users_service.update_profile(
-        db_session, customer_user, UserProfileUpdateIn(email="brand.new@elizade.com")
-    )
+    users_service.change_email_verified(db_session, customer_user, "brand.new@elizade.com")
     db_session.refresh(customer_user)
 
     assert customer_user.phone_normalized == "8109998877"
