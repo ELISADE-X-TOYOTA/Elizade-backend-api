@@ -2,7 +2,10 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.responses import JSONResponse
+from psycopg2 import errors
+from sqlalchemy.exc import DataError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -48,6 +51,8 @@ async def lifespan(_: FastAPI):
     yield
 
 
+logger = logging.getLogger("elizade.main")
+
 app = FastAPI(
     title="Elizade Connect API",
     version="0.1.0",
@@ -65,6 +70,44 @@ app.add_middleware(
 )
 
 app.include_router(api_router)
+
+@app.exception_handler(DataError)
+async def malformed_identifier(request: Request, exc: DataError) -> JSONResponse:
+    """A client id Postgres cannot parse is a bad REQUEST, not a server fault.
+
+    Every id in this API is a UUID column, and 173 places take one straight
+    from the client into a query. Hand any of them something that is not a
+    UUID — "undefined", an empty string, a demo id like `ov1` — and psycopg2
+    raises `invalid input syntax for type uuid`, which nothing caught. The
+    result was a 500, and the app renders 5xx as "Elizade services are
+    temporarily unavailable", so a malformed id read to testers as an outage.
+
+    That is exactly what happened: the telemetry captured nine of these,
+    against `/warranty/eligibility`, `/warranty/claims` and
+    `/auth/otp/request`, and every warranty screen was reported as down.
+
+    Handled centrally rather than at 173 call sites, because the guard that
+    has to be remembered every time is the guard that gets forgotten.
+
+    NARROW ON PURPOSE. Only a malformed literal becomes a 400; any other
+    `DataError` — a numeric overflow, a value too long for its column — is a
+    real server-side fault and stays a 500, logged, rather than being dressed
+    up as the client's mistake.
+    """
+    orig = getattr(exc, "orig", None)
+    if isinstance(orig, errors.InvalidTextRepresentation):
+        logger.warning("[REQUEST] malformed identifier on %s %s", request.method, request.url.path)
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": "That identifier is not valid."},
+        )
+
+    logger.exception("[REQUEST] database rejected a value on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"detail": "Something went wrong. Please try again."},
+    )
+
 
 _uploads = Path("uploads/vehicles")
 _uploads.mkdir(parents=True, exist_ok=True)

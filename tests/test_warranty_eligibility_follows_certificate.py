@@ -236,3 +236,95 @@ def test_policy_handles_a_naive_datetime():
     naive = datetime.now() + timedelta(days=30)
     eligible, _ = is_within_certificate_cover(coverage_end=naive, current_mileage=0)
     assert eligible is True
+
+
+# ── The two answers must be the same answer ──────────────────────────────
+
+
+def test_the_claim_gate_agrees_with_the_eligibility_check(
+    db_session, customer_user, car_without_purchase_date
+):
+    """THE SECOND HALF OF THIS BUG, and it was missed the first time round.
+
+    `check_eligibility` was taught to follow an issued certificate.
+    `submit_customer_claim` kept re-deriving cover from `purchase_date` alone,
+    so the app asked "am I covered?", was told yes, and then had the claim
+    refused with "In-service date is not recorded for this vehicle" — on 23 of
+    the 25 owned vehicles in production.
+
+    Both now go through `warranty_decision`, so they cannot disagree.
+    """
+    from app.domains.warranty.schemas import ClaimCreateIn
+
+    _certificate(db_session, customer_user, car_without_purchase_date)
+
+    said = warranty_service.check_eligibility(
+        db_session, customer_user.id, car_without_purchase_date.id
+    )
+    assert said["eligible"] is True
+
+    claim = warranty_service.submit_customer_claim(
+        db_session,
+        customer_user.id,
+        ClaimCreateIn(
+            ownedVehicleId=car_without_purchase_date.id,
+            claimType="Suspension & Brakes",
+            description="Knocking over speed bumps since last week.",
+            attachmentUrls=[],
+        ),
+    )
+    assert claim.id, "the claim was refused after eligibility said yes"
+
+
+def test_the_claim_gate_still_refuses_a_vehicle_with_no_cover(
+    db_session, customer_user, car_without_purchase_date
+):
+    """Agreement must not mean 'always yes'."""
+    import pytest as _pytest
+    from fastapi import HTTPException
+    from app.domains.warranty.schemas import ClaimCreateIn
+
+    said = warranty_service.check_eligibility(
+        db_session, customer_user.id, car_without_purchase_date.id
+    )
+    assert said["eligible"] is False
+
+    with _pytest.raises(HTTPException) as exc:
+        warranty_service.submit_customer_claim(
+            db_session,
+            customer_user.id,
+            ClaimCreateIn(
+                ownedVehicleId=car_without_purchase_date.id,
+                claimType="Other",
+                description="Something is rattling underneath.",
+                attachmentUrls=[],
+            ),
+        )
+    assert exc.value.status_code == 422
+
+
+def test_mileage_supplied_on_the_claim_is_what_gets_judged(
+    db_session, customer_user, car_without_purchase_date
+):
+    """A claim may report a newer odometer reading than the stored one."""
+    import pytest as _pytest
+    from fastapi import HTTPException
+    from app.domains.warranty.policy import BASIC_WARRANTY_KM
+    from app.domains.warranty.schemas import ClaimCreateIn
+
+    _certificate(db_session, customer_user, car_without_purchase_date)
+
+    with _pytest.raises(HTTPException) as exc:
+        warranty_service.submit_customer_claim(
+            db_session,
+            customer_user.id,
+            ClaimCreateIn(
+                ownedVehicleId=car_without_purchase_date.id,
+                claimType="Other",
+                description="Reporting a much higher mileage than we hold.",
+                currentMileage=BASIC_WARRANTY_KM + 5000,
+                attachmentUrls=[],
+            ),
+        )
+    assert exc.value.status_code == 422
+    assert "mileage" in (exc.value.detail or "").lower()

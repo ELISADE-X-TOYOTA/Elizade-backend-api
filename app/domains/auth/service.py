@@ -1,4 +1,5 @@
 import logging
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import HTTPException, status
@@ -89,6 +90,36 @@ def request_otp(db: Session, payload: OtpRequestIn) -> OtpRequestOut:
                 detail="Account already exists.",
             )
         phone_norm, phone_display = placeholder_phone_for_email(email_norm)
+        """
+        A COLLIDING PLACEHOLDER MUST NOT BE A 500.
+
+        `phone_normalized` is unique and, for email-only accounts, derived from
+        the address. `update_profile` now moves it when an email changes, so
+        the common cause is gone — but rows created before that fix still carry
+        placeholders for addresses they no longer own, and any registration
+        with one of those addresses would raise `UniqueViolation` and surface
+        as "Elizade services are temporarily unavailable".
+
+        A stale row is not a reason to refuse a customer. If the derived value
+        is taken by somebody else, a unique one is used instead: the placeholder
+        exists only to satisfy a NOT NULL column, and nothing reads meaning
+        back out of it.
+        """
+        clash = (
+            db.query(User)
+            .filter(User.phone_normalized == phone_norm)
+            .filter(User.email != email_norm)
+            .first()
+        )
+        if clash is not None:
+            logger.warning(
+                "[AUTH] placeholder phone for %s is held by a stale row (%s); "
+                "issuing a unique one instead",
+                email_norm, clash.email,
+            )
+            phone_norm = f"e{uuid.uuid4().hex[:15]}"
+            phone_display = email_norm
+
         if not user:
             user = User(
                 phone_normalized=phone_norm,
