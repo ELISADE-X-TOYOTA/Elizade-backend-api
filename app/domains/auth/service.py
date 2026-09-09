@@ -13,7 +13,7 @@ from app.core.security import (
 )
 from app.domains.auth.schemas import AuthTokenOut, OtpRequestIn, OtpRequestOut, OtpVerifyIn
 from app.domains.auth import refresh as refresh_service
-from app.domains.auth import review_bypass
+from app.domains.auth import bypass_throttle, review_bypass
 from app.domains.users.models import DEFAULT_PREFERENCES, OtpChallenge, OtpPurpose, User, UserRole
 from app.domains.users.schemas import UserProfileOut
 from app.services.otp import MAX_OTP_ATTEMPTS, create_and_dispatch_otp
@@ -142,11 +142,44 @@ def verify_otp(db: Session, payload: OtpVerifyIn) -> AuthTokenOut:
     # attempt. A wrong code here falls through to the normal path and is
     # rejected like any other, so the fixed code is not a way to skip
     # verification — only a way to satisfy it without a mailbox.
-    if review_bypass.is_review_email(email_norm) and review_bypass.code_matches(code):
-        reviewer = db.query(User).filter(User.email == email_norm).one_or_none()
-        if review_bypass.may_bypass(reviewer):
-            logger.warning("[REVIEW] fixed-code sign-in accepted for %s", email_norm)
-            return _issue_session(db, reviewer)
+    if review_bypass.is_review_email(email_norm):
+        """
+        THROTTLED, which it never used to be.
+
+        A wrong code here simply fell through to the normal path, and the
+        normal path counts attempts on an `OtpChallenge` row that a bypass
+        sign-in never creates — so nothing was counting. A permanent secret
+        against an endpoint answering as fast as it is asked is a search, not a
+        wall, and that absence is the only reason the code had to contain a
+        letter.
+
+        Checked BEFORE the code comparison, so a locked-out address costs an
+        attacker a request and tells them nothing.
+        """
+        locked = bypass_throttle.seconds_locked(db, email_norm)
+        if locked:
+            logger.warning("[REVIEW] fixed-code sign-in REFUSED for %s — locked for %ds", email_norm, locked)
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many incorrect codes. Please try again in a few minutes.",
+            )
+
+        if review_bypass.code_matches(code):
+            reviewer = db.query(User).filter(User.email == email_norm).one_or_none()
+            if review_bypass.may_bypass(reviewer):
+                logger.warning("[REVIEW] fixed-code sign-in accepted for %s", email_norm)
+                # A correct sign-in clears the count, so ordinary fat-fingering
+                # never accumulates towards a lockout across sessions.
+                bypass_throttle.clear(db, email_norm)
+                return _issue_session(db, reviewer)
+        else:
+            # Counted only for a configured address. An unlisted email cannot
+            # reach this branch at all, so no stranger can lock the reviewer out.
+            remaining = bypass_throttle.record_failure(db, email_norm)
+            logger.warning(
+                "[REVIEW] fixed-code sign-in FAILED for %s — %d attempt(s) left",
+                email_norm, remaining,
+            )
 
     challenge = (
         db.query(OtpChallenge)

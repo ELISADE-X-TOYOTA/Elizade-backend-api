@@ -120,9 +120,15 @@ def test_a_malformed_entry_is_refused(configured):
     assert any("not an email" in p for p in problems), problems
 
 
-def test_the_code_rules_are_unchanged(configured):
-    assert any("letter" in p for p in configured("a@x.com", code="123456").validate_configuration())
+def test_the_length_rule_still_applies(configured):
+    """Length is still enforced — the OTP screen has exactly six boxes.
+
+    The all-digit rule is NOT enforced any more: the bypass branch is rate
+    limited now, so digits are a weaker choice rather than an unsafe one. See
+    `test_bypass_throttle.py`.
+    """
     assert any("characters" in p for p in configured("a@x.com", code="Uq39Hzz").validate_configuration())
+    assert configured("a@x.com", code="334567").validate_configuration() == []
 
 
 # ── The account guard, which the list does not weaken ────────────────────
