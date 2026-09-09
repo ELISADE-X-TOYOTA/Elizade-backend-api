@@ -39,11 +39,14 @@ class Settings(BaseSettings):
     #: to set it. Customers saw "Meristem" on their Elizade sign-in codes, and
     #: nothing in the system considered that worth mentioning.
     #:
+    #: elizade.NET, not .com — the company's site is elizade.net, and the
+    #: earlier default here guessed the wrong TLD.
+    #:
     #: Changing this is NOT enough on its own: the address has to be a verified
     #: sender in Postmark, with SPF and DKIM published for the domain, or mail
     #: stops going out entirely. `mail_sender_warning()` says so at boot rather
     #: than leaving it to a customer to notice.
-    smtp_from_email: str = "noreply@elizade.com"
+    smtp_from_email: str = "noreply@elizade.net"
     smtp_use_tls: bool = True
 
     # Populate the database with demo content (30 vehicles, sample customers,
@@ -77,9 +80,13 @@ class Settings(BaseSettings):
     sms_base_url: str = "https://api.ng.termii.com"
 
     # Shown in transactional email (footer / support links).
-    support_email: str = "support@elizade.com"
-    support_phone: str = "+234 700 354 9233"
-    support_url: str = "https://elizade.com/contact"
+    #: OFFICIAL contact details, printed in the footer of every transactional
+    #: email. These were placeholders: a `support@elizade.com` inbox and a
+    #: 0700 service line that has no WhatsApp account behind it, on a domain
+    #: (elizade.com) that is not the company's — the site is elizade.net.
+    support_email: str = "info@elizade.net"
+    support_phone: str = "09013248553"
+    support_url: str = "https://www.elizade.net"
 
     @property
     def cors_origin_list(self) -> list[str]:
