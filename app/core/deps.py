@@ -29,6 +29,27 @@ def get_current_user(
     return user
 
 
+def get_current_user_optional(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
+    db: Annotated[Session, Depends(get_db)],
+) -> User | None:
+    """The signed-in user if there is one, otherwise `None`.
+
+    For endpoints that must accept both, rather than gate on it — telemetry is
+    the case that needed it: a failing sign-in is exactly the failure worth
+    recording, and it has no user yet. An invalid or expired token is treated
+    as "nobody" rather than an error, because refusing a crash report over its
+    credentials loses the report and helps no one.
+    """
+    if not credentials or credentials.scheme.lower() != "bearer":
+        return None
+    user_id = decode_access_token(credentials.credentials)
+    if not user_id:
+        return None
+    user = db.get(User, user_id)
+    return user if user and user.is_active else None
+
+
 def require_admin(user: Annotated[User, Depends(get_current_user)]) -> User:
     if user.role != UserRole.admin:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
