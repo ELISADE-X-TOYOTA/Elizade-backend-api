@@ -174,12 +174,15 @@ def validate_configuration() -> list[str]:
             f"the app's OTP screen has {MIN_CODE_LENGTH} boxes, so anything "
             f"longer cannot be entered."
         )
-    if code and code.isdigit():
-        problems.append(
-            "REVIEW_ACCOUNT_OTP must contain at least one letter. Six digits is "
-            "a million combinations for a code that never expires and never "
-            "rotates — use something like 'Rv7Kqm', not '123456'."
-        )
+    # ALL DIGITS IS NOW ALLOWED, because the branch is rate limited.
+    #
+    # This used to be refused outright, and rightly so at the time: six digits
+    # is a million combinations, and `/auth/otp/verify` applied no limit at all
+    # on this branch, so the letter was the only thing standing between a
+    # permanent secret and a script. `bypass_throttle` counts failures per
+    # address and locks out after five, which turns that million-code space
+    # into years rather than minutes. The letter is a preference now, not a
+    # defence — so it is a warning in the log rather than a refusal to boot.
     return problems
 
 
@@ -189,6 +192,16 @@ def log_status() -> None:
         logger.info("[REVIEW] no store-reviewer account configured — OTP required for everyone")
         return
     emails = configured_emails()
+    code = get_settings().review_account_otp.strip()
+    if code.isdigit():
+        logger.warning(
+            "[REVIEW] the fixed code is all digits — a %d-combination space. "
+            "Acceptable only because the branch is rate limited (%d attempts "
+            "per address, then a lockout); a code with a letter is still "
+            "stronger.",
+            10 ** len(code),
+            __import__("app.domains.auth.bypass_throttle", fromlist=["MAX_ATTEMPTS"]).MAX_ATTEMPTS,
+        )
     logger.warning(
         "[REVIEW] fixed-code bypass ACTIVE for %d account(s): %s — these sign "
         "in with a code that never expires and never rotates, and they all "

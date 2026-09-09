@@ -186,13 +186,33 @@ def test_a_missing_review_account_is_not_created(client, db_session, bypass_on):
 # ── Configuration guard ──────────────────────────────────────────────────
 
 
-def test_an_all_digit_code_is_refused_at_startup(monkeypatch):
-    """`123456` is a million combinations and this code never rotates."""
+def test_an_all_digit_code_is_now_allowed(monkeypatch):
+    """THIS TEST USED TO ASSERT THE OPPOSITE, and the change is deliberate.
+
+    An all-digit code was refused at startup because six digits is a million
+    combinations and `/auth/otp/verify` applied NO limit on the bypass branch —
+    the letter requirement was the only thing between a permanent secret and a
+    script. It was a workaround for the missing limit, not a fix for it.
+
+    `bypass_throttle` now counts failures per address and locks out after five,
+    which turns that million-code space from minutes into years. With the real
+    defence in place the letter is a preference, so it is a logged warning at
+    boot rather than a refusal to start. See `test_bypass_throttle.py`.
+    """
     s = get_settings()
     monkeypatch.setattr(s, "review_account_email", REVIEW_EMAIL, raising=False)
     monkeypatch.setattr(s, "review_account_otp", "123456", raising=False)
-    problems = review_bypass.validate_configuration()
-    assert problems and "letter" in problems[0]
+
+    assert review_bypass.validate_configuration() == []
+
+
+def test_the_length_rule_survives(monkeypatch):
+    """Six boxes on the OTP screen — a longer code cannot be typed at all."""
+    s = get_settings()
+    monkeypatch.setattr(s, "review_account_email", REVIEW_EMAIL, raising=False)
+    monkeypatch.setattr(s, "review_account_otp", "1234567", raising=False)
+
+    assert review_bypass.validate_configuration()
 
 
 def test_half_configured_is_refused_at_startup(monkeypatch):

@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String, func
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -149,3 +149,31 @@ class RefreshToken(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     user: Mapped[User] = relationship()
+
+
+class ReviewBypassAttempt(Base):
+    """Failed attempts against the fixed-code sign-in, per address.
+
+    The bypass accepts a permanent secret, and `/auth/otp/verify` applied no
+    limit at all on that branch: a wrong code fell through to the normal path,
+    which counts attempts on its `OtpChallenge` row. The bypass creates no
+    challenge, so nothing was counting.
+
+    That absence is the whole reason the code was required to contain a letter
+    — six digits is a million combinations against an endpoint answering as
+    fast as it is asked. Counting here is the actual fix, and it makes the
+    letter a preference rather than a load-bearing defence.
+
+    One row per address, deleted on a successful sign-in.
+    """
+
+    __tablename__ = "review_bypass_attempts"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    #: Normalised email. Unique because the count IS per address.
+    email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    failed_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    #: Start of the current counting window.
+    first_failed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    #: Set once the limit is hit; null while attempts remain.
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
