@@ -501,6 +501,55 @@ def list_customer_claims(db: Session, user_id: str) -> list[WarrantyClaimListIte
     return [WarrantyClaimListItemOut.from_model(r) for r in rows]
 
 
+def _active_certificate(db: Session, vehicle: OwnedVehicle) -> WarrantyCertificate | None:
+    return (
+        db.query(WarrantyCertificate)
+        .filter(
+            WarrantyCertificate.owned_vehicle_id == vehicle.id,
+            WarrantyCertificate.status == WarrantyCertificateStatus.active,
+        )
+        .order_by(WarrantyCertificate.created_at.desc())
+        .first()
+    )
+
+
+def warranty_decision(
+    db: Session, vehicle: OwnedVehicle, *, current_mileage: int | None = None
+) -> tuple[bool, str | None, WarrantyCertificate | None]:
+    """Is this vehicle covered? The ONE place that decides.
+
+    THIS EXISTS BECAUSE THE ANSWER WAS COMPUTED TWICE AND THEY DISAGREED.
+    `check_eligibility` was taught to follow an issued certificate — the fix
+    for customers whose vehicle carries no `purchase_date`, which is 23 of the
+    25 in production. `submit_customer_claim` kept the old derivation, so the
+    app asked "am I covered?", was told yes, and then had the claim refused
+    with "In-service date is not recorded for this vehicle".
+
+    Answering in one function is the actual fix. Two call sites deciding the
+    same thing separately will drift again, and the drift is invisible until a
+    customer is caught between them.
+
+    The certificate wins when there is one: it is the record that cover was
+    granted and when it runs to, and for `extended` cover its window is longer
+    than the basic term. Falling back to the purchase date keeps vehicles that
+    never had a certificate working exactly as before.
+    """
+    cert = _active_certificate(db, vehicle)
+    mileage = current_mileage if current_mileage is not None else vehicle.mileage
+
+    if cert is not None:
+        eligible, reason = is_within_certificate_cover(
+            coverage_end=cert.coverage_end,
+            current_mileage=mileage,
+        )
+    else:
+        eligible, reason = is_within_basic_warranty(
+            in_service_date=vehicle.purchase_date,
+            current_mileage=mileage,
+        )
+    return eligible, reason, cert
+
+
 def check_eligibility(db: Session, user_id: str, owned_vehicle_id: str) -> dict:
     vehicle = (
         db.query(OwnedVehicle)
@@ -510,17 +559,7 @@ def check_eligibility(db: Session, user_id: str, owned_vehicle_id: str) -> dict:
     if not vehicle:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found")
 
-    # The certificate is read FIRST, because it is the authoritative record of
-    # cover and everything below depends on it.
-    cert = (
-        db.query(WarrantyCertificate)
-        .filter(
-            WarrantyCertificate.owned_vehicle_id == vehicle.id,
-            WarrantyCertificate.status == WarrantyCertificateStatus.active,
-        )
-        .order_by(WarrantyCertificate.created_at.desc())
-        .first()
-    )
+    eligible, reason, cert = warranty_decision(db, vehicle)
 
     coverage_end = None
     if cert:
@@ -543,17 +582,6 @@ def check_eligibility(db: Session, user_id: str, owned_vehicle_id: str) -> dict:
     longer than the basic 36 months and which re-derivation silently cut back
     to the basic term.
     """
-    if cert is not None:
-        eligible, reason = is_within_certificate_cover(
-            coverage_end=cert.coverage_end,
-            current_mileage=vehicle.mileage,
-        )
-    else:
-        eligible, reason = is_within_basic_warranty(
-            in_service_date=vehicle.purchase_date,
-            current_mileage=vehicle.mileage,
-        )
-
     # `coverage_start` is the in-service date that was used when the
     # certificate was issued, so it is the honest answer for a vehicle whose
     # own purchase date was never captured — better than reporting null and
@@ -595,10 +623,15 @@ def submit_customer_claim(db: Session, user_id: str, payload: ClaimCreateIn) -> 
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found")
 
     mileage = payload.current_mileage if payload.current_mileage is not None else vehicle.mileage
-    eligible, reason = is_within_basic_warranty(
-        in_service_date=vehicle.purchase_date,
-        current_mileage=mileage,
-    )
+    # THE SAME DECISION THE APP ASKED FOR, not a second one.
+    #
+    # This used to re-derive cover from `vehicle.purchase_date` alone while
+    # `check_eligibility` followed the issued certificate — so the app asked
+    # "am I covered?", was told yes, and then had the claim refused with
+    # "In-service date is not recorded for this vehicle". 23 of the 25 owned
+    # vehicles in production have no purchase date, so that was almost
+    # everyone.
+    eligible, reason, _cert = warranty_decision(db, vehicle, current_mileage=mileage)
     if not eligible:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=reason or "Not eligible")
 
