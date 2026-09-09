@@ -18,8 +18,15 @@ configured. Every rule below exists to bound that:
 
   * OFF unless BOTH settings are present. A default build has no bypass, so
     forgetting to configure it fails closed rather than open.
-  * Exactly one email, compared after normalisation. There is no pattern, no
-    domain rule, no list.
+  * A short, explicit LIST of addresses, each compared after normalisation.
+    There is still no pattern and no domain rule — a wildcard here would turn
+    a reviewer workaround into a way past the front door for anyone with the
+    code. The list is capped, because "just add one more" is how a bounded
+    exception becomes an unbounded one.
+  * ONE code for the whole list. Every listed address is therefore exposed if
+    the code leaks, which is the argument for keeping the list at the two or
+    three people who genuinely cannot receive email, and removing them the day
+    they can.
   * The code is compared in constant time. A fixed secret checked with `==`
     leaks its length and prefix to a patient attacker.
   * A minimum code length is enforced at startup. `123456` is a six-digit
@@ -62,17 +69,43 @@ logger = logging.getLogger("elizade.auth.review")
 #: never be confused with a real six-digit OTP.
 MIN_CODE_LENGTH = 6
 
+#: How many addresses may share the fixed code.
+#:
+#: A cap rather than an unlimited list, because this is a standing credential
+#: and the list is the blast radius. Store reviewers plus a couple of testers
+#: who cannot receive email is the intended shape; a dozen is a sign the real
+#: problem is mail deliverability and should be fixed there instead.
+MAX_BYPASS_ACCOUNTS = 5
+
+
+def configured_emails() -> list[str]:
+    """The nominated addresses, normalised, in configuration order.
+
+    `REVIEW_ACCOUNT_EMAIL` accepts one address or several separated by commas.
+    A single address is still the common case and still works unchanged.
+    """
+    raw = get_settings().review_account_email or ""
+    seen: list[str] = []
+    for part in raw.split(","):
+        candidate = part.strip()
+        if not candidate:
+            continue
+        normalised = normalize_email(candidate)
+        if normalised not in seen:
+            seen.append(normalised)
+    return seen
+
 
 def is_enabled() -> bool:
     s = get_settings()
-    return bool(s.review_account_email.strip()) and bool(s.review_account_otp.strip())
+    return bool(configured_emails()) and bool(s.review_account_otp.strip())
 
 
 def is_review_email(email: str) -> bool:
-    """True when `email` is the nominated reviewer account."""
+    """True when `email` is one of the nominated accounts."""
     if not is_enabled():
         return False
-    return normalize_email(email) == normalize_email(get_settings().review_account_email)
+    return normalize_email(email) in configured_emails()
 
 
 def code_matches(code: str) -> bool:
@@ -116,6 +149,20 @@ def validate_configuration() -> list[str]:
     if not email and not code:
         return []
     problems: list[str] = []
+
+    emails = configured_emails()
+    if email and not emails:
+        problems.append("REVIEW_ACCOUNT_EMAIL contains no usable address.")
+    if len(emails) > MAX_BYPASS_ACCOUNTS:
+        problems.append(
+            f"REVIEW_ACCOUNT_EMAIL lists {len(emails)} addresses; at most "
+            f"{MAX_BYPASS_ACCOUNTS} may share a standing credential. If more "
+            f"people cannot receive their code, fix mail delivery rather than "
+            f"widening this."
+        )
+    for candidate in emails:
+        if "@" not in candidate or candidate.startswith("@") or candidate.endswith("@"):
+            problems.append(f"REVIEW_ACCOUNT_EMAIL entry {candidate!r} is not an email address.")
     if bool(email) != bool(code):
         problems.append(
             "REVIEW_ACCOUNT_EMAIL and REVIEW_ACCOUNT_OTP must be set together; "
@@ -141,9 +188,12 @@ def log_status() -> None:
     if not is_enabled():
         logger.info("[REVIEW] no store-reviewer account configured — OTP required for everyone")
         return
+    emails = configured_emails()
     logger.warning(
-        "[REVIEW] store-reviewer bypass ACTIVE for %s — this account signs in "
-        "with a fixed code that never expires. Unset REVIEW_ACCOUNT_EMAIL and "
-        "REVIEW_ACCOUNT_OTP once review is complete.",
-        normalize_email(get_settings().review_account_email),
+        "[REVIEW] fixed-code bypass ACTIVE for %d account(s): %s — these sign "
+        "in with a code that never expires and never rotates, and they all "
+        "share it. Unset REVIEW_ACCOUNT_EMAIL and REVIEW_ACCOUNT_OTP once "
+        "review and testing are complete.",
+        len(emails),
+        ", ".join(emails),
     )
