@@ -70,6 +70,7 @@ FULL_CONTEXT = {
     "when": "14 Aug at 09:30",
     "branch": "Elizade Ikeja",
     "valid_until": "30 Aug 2026",
+    "hold_until": "17 September 2026",
     "amount": "NGN 4,500,000",
     "model": "Land Cruiser",
     "service_type": "Periodic Maintenance",

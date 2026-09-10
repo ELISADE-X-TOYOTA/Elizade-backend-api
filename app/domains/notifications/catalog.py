@@ -128,6 +128,24 @@ QUOTATION_ISSUED = _spec(
     requires=("vehicle_label", "valid_until"),
 )
 
+#: Reserving a vehicle sent NOTHING, while the app's success sheet said "A
+#: confirmation has been sent to your email". There was no reservation event
+#: in this catalogue at all — not a failing worker, no template, no send.
+#:
+#: "Reserved", not "deposit received": no payment is taken at this point. The
+#: hold is real and the vehicle is marked reserved, but the deposit is arranged
+#: with the branch afterwards, and the copy has to say so or the customer
+#: believes they have paid.
+RESERVATION_CONFIRMED = _spec(
+    key="sales.reservation_confirmed",
+    category=NotificationCategory.sales,
+    title="Vehicle reserved",
+    body="The {vehicle_label} is held for you at {branch} until {hold_until}.",
+    deep_link="/reservations",
+    channels=(IN_APP, PUSH, EMAIL),
+    requires=("vehicle_label", "branch", "hold_until"),
+)
+
 TRADE_IN_VALUED = _spec(
     key="sales.trade_in_valued",
     category=NotificationCategory.sales,
@@ -337,6 +355,7 @@ ALL_EVENTS: tuple[EventSpec, ...] = (
     TEST_DRIVE_CONFIRMED,
     TEST_DRIVE_CANCELLED,
     QUOTATION_ISSUED,
+    RESERVATION_CONFIRMED,
     TRADE_IN_VALUED,
     WATCHED_MODEL_AVAILABLE,
     SERVICE_APPOINTMENT_REQUESTED,
