@@ -353,7 +353,66 @@ def create_reservation(db: Session, user: User, payload: ReservationCreateIn) ->
     )
     db.commit()
     loaded = db.query(Reservation).options(joinedload(Reservation.vehicle)).filter(Reservation.id == row.id).one()
+
+    # RESERVING SENT NOTHING, while the app's success sheet said "A
+    # confirmation has been sent to your email". There was no reservation event
+    # in the catalogue at all — no failing worker, no template, no call. A
+    # customer was told a receipt existed for a hold on a car worth millions of
+    # naira, and nothing arrived.
+    #
+    # After the commit: the hold stands whether or not the mail goes out.
+    branch_name = vehicle.branch.name if vehicle.branch else "your branch"
+    hold_until = expires_at.strftime("%d %B %Y")
+    reservation_email = _reservation_email(
+        user=user,
+        reservation=loaded,
+        vehicle_label=_vehicle_label(vehicle),
+        branch=branch_name,
+        hold_until=hold_until,
+    )
+    safe_notify(
+        db,
+        user=user,
+        event=catalog.RESERVATION_CONFIRMED,
+        context={
+            "vehicle_label": _vehicle_label(vehicle),
+            "branch": branch_name,
+            "hold_until": hold_until,
+        },
+        email_text=reservation_email["text"],
+        email_html=reservation_email["html"],
+    )
     return ReservationOut.from_model(loaded)
+
+
+def _reservation_reference(reservation_id: str) -> str:
+    """Short handle a customer can quote at the branch."""
+    return f"ELZ-{reservation_id.replace('-', '')[:6].upper()}"
+
+
+def _reservation_email(
+    *, user: User, reservation: Reservation, vehicle_label: str, branch: str, hold_until: str
+) -> dict[str, str]:
+    from app.services.email_templates import (  # noqa: PLC0415 — avoids an import cycle
+        build_reservation_html,
+        build_reservation_plain_text,
+    )
+
+    fields = {
+        "customer_name": (user.first_name or "").strip(),
+        "vehicle_label": vehicle_label,
+        "branch": branch,
+        # Labelled as OWED, not received: no payment is taken at this point,
+        # and the app had the same bug on screen, printing "Deposit Paid"
+        # beside an amount nobody had paid.
+        "deposit": reservation.deposit_amount,
+        "hold_until": hold_until,
+        "reference": _reservation_reference(reservation.id),
+    }
+    return {
+        "text": build_reservation_plain_text(**fields),
+        "html": build_reservation_html(**fields),
+    }
 
 
 def list_my_trade_ins(db: Session, user_id: str) -> list[TradeInOut]:

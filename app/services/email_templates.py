@@ -478,3 +478,217 @@ def build_quotation_html(
   </table>
 </body>
 </html>"""
+
+
+
+# ── Reservation ──────────────────────────────────────────────────────
+#
+# The app's success sheet said "A confirmation has been sent to your email".
+# Nothing was sent — there was no reservation event in the catalogue, no
+# template, and no call. The customer was told a receipt existed for a hold on
+# a car worth millions of naira, and nothing arrived.
+#
+# NO PAYMENT IS TAKEN at this point. The hold is real and the vehicle is marked
+# reserved, but the deposit is arranged with the branch afterwards, so the
+# figure below is labelled as owed, not received. The app had the same bug on
+# screen, printing "Deposit Paid" beside an amount nobody had paid.
+
+
+def build_reservation_plain_text(
+    *,
+    customer_name: str,
+    vehicle_label: str,
+    branch: str,
+    deposit,
+    hold_until: str,
+    reference: str,
+) -> str:
+    settings = get_settings()
+    greeting = f"Hello {customer_name}," if customer_name else "Hello,"
+    lines = [
+        greeting,
+        "",
+        f"The {vehicle_label} is now held for you at {branch}.",
+        "",
+        f"Reservation reference: {reference}",
+        f"Held until: {hold_until}",
+    ]
+    if deposit and deposit > 0:
+        lines += [
+            f"Deposit to pay: {_naira(deposit)}",
+            "",
+            "NO PAYMENT HAS BEEN TAKEN YET. Our sales team will contact you to",
+            "arrange the deposit, which is deducted from the final price.",
+        ]
+    else:
+        lines += ["", "No deposit has been taken. Our sales team will be in touch."]
+    lines += [
+        "",
+        "If the hold expires the vehicle returns to general availability, so",
+        "please get in touch before then if you need longer.",
+        "",
+        f"Questions? Contact {settings.support_email} or {settings.support_phone}",
+        "",
+        "- Elizade Nigeria Limited - Authorised Toyota, Jetour & JAC Distributor",
+    ]
+    return "\n".join(lines)
+
+
+def build_reservation_html(
+    *,
+    customer_name: str,
+    vehicle_label: str,
+    branch: str,
+    deposit,
+    hold_until: str,
+    reference: str,
+) -> str:
+    """Branded receipt, under the same email-client constraints as the rest:
+    table layout, inline CSS, no flexbox, no web fonts, 600px."""
+    settings = get_settings()
+    font = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+    greeting = f"Hello {customer_name}, the" if customer_name else "The"
+
+    deposit_block = ""
+    if deposit and deposit > 0:
+        deposit_block = f"""
+          <tr>
+            <td class="pad" style="padding:20px 32px 0;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"
+                     style="background-color:#FFF8E6;border-left:4px solid {BRAND_GOLD};border-radius:8px;">
+                <tr>
+                  <td style="padding:14px 16px;font-family:{font};">
+                    <p style="margin:0 0 4px;font-size:13px;line-height:1.6;color:#6B4E00;">
+                      <strong>Deposit to pay: {_naira(deposit)}</strong>
+                    </p>
+                    <p style="margin:0;font-size:13px;line-height:1.6;color:#6B4E00;">
+                      No payment has been taken yet. Our sales team will contact you
+                      to arrange it, and it is deducted from the final price.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>"""
+
+    return f"""<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <title>Your Elizade Connect reservation</title>
+  <!--[if mso]>
+  <style type="text/css">
+    body, table, td {{ font-family: Arial, Helvetica, sans-serif !important; }}
+  </style>
+  <![endif]-->
+  <style type="text/css">
+    @media only screen and (max-width: 620px) {{
+      .wrap {{ width: 100% !important; }}
+      .pad {{ padding-left: 22px !important; padding-right: 22px !important; }}
+      .h1 {{ font-size: 24px !important; }}
+    }}
+    a {{ color: {BRAND_GOLD_DARK}; }}
+  </style>
+</head>
+<body style="margin:0;padding:0;background-color:{SURFACE_ALT};-webkit-font-smoothing:antialiased;">
+
+  <div style="display:none;font-size:1px;color:{SURFACE_ALT};line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;">
+    The {vehicle_label} is held for you at {branch} until {hold_until}.
+    &#8199;&#65279;&#847; &#8199;&#65279;&#847; &#8199;&#65279;&#847; &#8199;&#65279;&#847;
+  </div>
+
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"
+         style="background-color:{SURFACE_ALT};padding:28px 12px;">
+    <tr>
+      <td align="center">
+
+        <table role="presentation" class="wrap" width="600" cellspacing="0" cellpadding="0" border="0"
+               style="width:600px;max-width:600px;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid {BORDER};">
+
+          <tr>
+            <td style="background-color:{BRAND_BLACK};padding:28px 32px;" class="pad">
+              <span style="display:inline-block;font-family:{font};font-size:22px;font-weight:700;color:{BRAND_GOLD};letter-spacing:0.5px;line-height:1;">
+                Elizade
+              </span>
+              <span style="display:inline-block;font-family:{font};font-size:11px;font-weight:600;color:#FFFFFF;letter-spacing:4px;text-transform:uppercase;padding-left:8px;">
+                Connect
+              </span>
+            </td>
+          </tr>
+
+          <tr><td style="height:4px;background-color:{BRAND_GOLD};font-size:0;line-height:0;">&nbsp;</td></tr>
+
+          <tr>
+            <td class="pad" style="padding:34px 32px 4px;font-family:{font};">
+              <h1 class="h1" style="margin:0 0 10px;font-size:26px;line-height:1.25;font-weight:700;color:{BRAND_INK};">
+                Vehicle reserved
+              </h1>
+              <p style="margin:0;font-size:15px;line-height:1.6;color:{TEXT_MUTED};">
+                {greeting} <strong style="color:{BRAND_INK};">{vehicle_label}</strong> is
+                now held for you at <strong style="color:{BRAND_INK};">{branch}</strong>.
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td class="pad" style="padding:22px 32px 0;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"
+                     style="background-color:{SURFACE_ALT};border:1px solid {BORDER};border-radius:14px;">
+                <tr>
+                  <td style="padding:20px;font-family:{font};">
+                    <p style="margin:0 0 4px;font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:{TEXT_MUTED};">
+                      Held until
+                    </p>
+                    <p style="margin:0;font-size:20px;line-height:1.2;font-weight:700;color:{BRAND_INK};">
+                      {hold_until}
+                    </p>
+                  </td>
+                  <td align="right" style="padding:20px;font-family:{font};">
+                    <p style="margin:0 0 4px;font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:{TEXT_MUTED};">
+                      Reference
+                    </p>
+                    <p style="margin:0;font-size:15px;line-height:1.4;font-weight:600;color:{BRAND_INK};white-space:nowrap;">
+                      {reference}
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+{deposit_block}
+          <tr>
+            <td class="pad" style="padding:20px 32px 30px;font-family:{font};">
+              <p style="margin:0;font-size:13px;line-height:1.6;color:{TEXT_FAINT};">
+                If the hold expires the vehicle returns to general availability, so
+                please get in touch before then if you need longer. Your reservation
+                is also saved in the Elizade Connect app.
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td class="pad" style="padding:22px 32px 26px;background-color:{SURFACE_ALT};border-top:1px solid {BORDER};font-family:{font};">
+              <p style="margin:0 0 10px;font-size:13px;font-weight:600;color:{BRAND_INK};">
+                Questions about this reservation?
+              </p>
+              <p style="margin:0 0 14px;font-size:13px;line-height:1.7;color:{TEXT_MUTED};">
+                <a href="mailto:{settings.support_email}" style="color:{BRAND_GOLD_DARK};text-decoration:underline;">{settings.support_email}</a>
+                &nbsp;&#183;&nbsp;
+                <a href="tel:{settings.support_phone.replace(' ', '')}" style="color:{BRAND_GOLD_DARK};text-decoration:underline;">{settings.support_phone}</a>
+              </p>
+              <p style="margin:0;font-size:11px;line-height:1.6;color:{TEXT_FAINT};">
+                &copy; Elizade Nigeria Limited &#183; Authorised Distributor for Toyota, Jetour &amp; JAC<br />
+                This is an automated message &#8212; please do not reply to this address.
+              </p>
+            </td>
+          </tr>
+
+        </table>
+
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""
