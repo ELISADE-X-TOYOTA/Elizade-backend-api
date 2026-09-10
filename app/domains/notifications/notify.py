@@ -19,6 +19,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.domains.notifications import catalog
 from app.domains.notifications.catalog import EventSpec, MissingContext
 from app.domains.notifications.models import (
@@ -28,6 +29,7 @@ from app.domains.notifications.models import (
 )
 from app.domains.shared.enums import NotificationCategory
 from app.domains.users.models import User
+from app.services.email_templates import build_notification_html
 from app.services.email import EmailDeliveryError, email_service
 from app.services.push import push_service
 from app.services.sms import SmsDeliveryError, sms_service
@@ -115,6 +117,26 @@ def _log(
     )
 
 
+#: One action per email. Three competing buttons is none, and a deep link into
+#: the app cannot be followed from a desktop inbox — so these point at the web
+#: contact page, which works from anywhere.
+_CTA_BY_CATEGORY = {
+    NotificationCategory.sales: "Talk to a sales adviser",
+    NotificationCategory.service: "Contact the service team",
+    NotificationCategory.warranty: "Contact the warranty team",
+    NotificationCategory.support: "Contact support",
+}
+
+
+def _cta_label_for(category: NotificationCategory) -> str | None:
+    """No button on system and security mail.
+
+    An account alert should not carry a call to action at all: those are
+    precisely the messages an attacker would like a customer to click through.
+    """
+    return _CTA_BY_CATEGORY.get(category)
+
+
 def notify(
     db: Session,
     *,
@@ -198,12 +220,32 @@ def notify(
             if channel == catalog.EMAIL:
                 if not user.email:
                     raise EmailDeliveryError("No email address on this account")
+                """
+                EVERY notification email is branded now, not just the three
+                with bespoke templates.
+
+                A ticket confirmation used to arrive as one unstyled sentence
+                from an address on the build vendor's domain — which is what a
+                phishing attempt looks like, on the most common mail this
+                system sends. Callers with something richer to say still pass
+                their own `email_html`; everyone else gets the shared shell
+                wrapped around the catalogue's own copy, so a new event is
+                branded the day it is added rather than the day somebody
+                remembers to write a template.
+                """
+                html = email_html or build_notification_html(
+                    title=rendered.title,
+                    body=email_text or rendered.body,
+                    customer_name=(user.first_name or "").strip(),
+                    cta_label=_cta_label_for(rendered.category),
+                    cta_url=get_settings().support_url,
+                )
                 email_service.send_notification(
                     to_email=user.email,
                     subject=rendered.title,
                     body=email_text or rendered.body,
                     category=rendered.category.value,
-                    html_body=email_html,
+                    html_body=html,
                 )
             elif channel == catalog.PUSH:
                 push_service.send(
