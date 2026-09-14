@@ -88,6 +88,10 @@ def test_issue_certificate_and_owned_vehicles(client, staff_headers, db_session,
     )
     assert created.status_code == 201
     assert created.json()["certificateNumber"].startswith("ELZ-WTY-")
+    # The certificate must name its vehicle by id, not just by label: the
+    # claim form files against this id, and a label cannot be filed against.
+    assert created.json()["ownedVehicleId"] == owned.id
+    assert created.json()["vin"] == owned.vin
 
 
 def test_create_recall_and_notify(client, staff_headers, db_session, customer_user):
@@ -111,3 +115,26 @@ def test_create_recall_and_notify(client, staff_headers, db_session, customer_us
     notified = client.post(f"/api/v1/admin/warranty/recalls/{recall_id}/notify", headers=staff_headers)
     assert notified.status_code == 200
     assert notified.json()["notifiedCount"] >= 0
+
+
+def test_customer_certificate_names_its_vehicle(client, staff_headers, customer_headers, db_session, customer_user):
+    """The customer's certificate carries the vehicle id and VIN.
+
+    The app files a claim against `ownedVehicleId`. Before this field existed
+    it had nothing to file against, so the claim sheet was hardwired to a
+    sample vehicle from the mock data — and every real claim came back
+    "That identifier is not valid." QA hit exactly that on 12 September.
+    """
+    _, owned = _make_claim(db_session, customer_user, description="For customer cert test")
+    issued = client.post(
+        "/api/v1/admin/warranty/certificates",
+        headers=staff_headers,
+        json={"ownedVehicleId": owned.id, "type": "standard"},
+    )
+    assert issued.status_code == 201
+
+    mine = client.get("/api/v1/warranty/certificates", headers=customer_headers)
+    assert mine.status_code == 200
+    cert = next(c for c in mine.json() if c["id"] == issued.json()["id"])
+    assert cert["ownedVehicleId"] == owned.id
+    assert cert["vin"] == "WTYTEST0000000001"

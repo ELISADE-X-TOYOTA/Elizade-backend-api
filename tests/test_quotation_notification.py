@@ -241,3 +241,35 @@ def test_the_quote_survives_an_email_failure(db_session, customer_user, vehicle,
 
     assert quote.id
     assert db_session.query(Quotation).filter(Quotation.id == quote.id).count() == 1
+
+
+def test_a_requested_quote_ignores_the_sales_opt_out(db_session, customer_user, vehicle, outbox):
+    """A quote you asked for is a receipt, not a sales notification.
+
+    On 12 September a tester with sales email switched OFF requested four
+    quotations. All four were written with status `sent`, the screen promised
+    an email, and the delivery log recorded `suppressed` for every one. The
+    preference exists so a customer can decline being told about things they
+    did not ask for; it cannot be allowed to swallow a document they did.
+    """
+    from app.domains.notifications.models import NotificationDelivery, NotificationPreference
+    from app.domains.shared.enums import NotificationCategory
+
+    db_session.add(NotificationPreference(
+        user_id=customer_user.id, category=NotificationCategory.sales, channel="email", enabled=False,
+    ))
+    db_session.commit()
+
+    _request(db_session, customer_user, vehicle)
+
+    assert len(outbox) == 1, "the quote the customer asked for was not emailed"
+    row = (
+        db_session.query(NotificationDelivery)
+        .filter(
+            NotificationDelivery.user_id == customer_user.id,
+            NotificationDelivery.event_key == "sales.quotation_issued",
+            NotificationDelivery.channel == "email",
+        )
+        .one()
+    )
+    assert row.status == "sent", row.status

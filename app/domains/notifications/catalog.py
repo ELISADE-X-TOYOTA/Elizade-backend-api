@@ -118,6 +118,16 @@ TEST_DRIVE_CANCELLED = _spec(
     requires=("vehicle_label",),
 )
 
+#: A RECEIPT, NOT A NOTIFICATION. The customer tapped "Request Quote" seconds
+#: ago and the app told them it would be emailed. It is filed under `sales`
+#: because that is what it is about — but the `sales` preference exists so a
+#: customer can decline being told about things they did NOT ask for. On 12
+#: September a tester with sales email switched off requested four quotations
+#: and received none of them, while the screen said "will be sent to your
+#: email". The preference was honoured and the promise was broken.
+#:
+#: So this is forced, like a security notice: a document you explicitly
+#: requested is delivered regardless of how you feel about sales mail.
 QUOTATION_ISSUED = _spec(
     key="sales.quotation_issued",
     category=NotificationCategory.sales,
@@ -125,6 +135,7 @@ QUOTATION_ISSUED = _spec(
     body="We've prepared your quote for the {vehicle_label}. It's valid until {valid_until}.",
     deep_link="/(tabs)/shop",
     channels=(IN_APP, PUSH, EMAIL),
+    force=True,
     requires=("vehicle_label", "valid_until"),
 )
 
@@ -136,6 +147,10 @@ QUOTATION_ISSUED = _spec(
 #: hold is real and the vehicle is marked reserved, but the deposit is arranged
 #: with the branch afterwards, and the copy has to say so or the customer
 #: believes they have paid.
+#: Forced for the same reason as the quotation: this is the receipt for a hold
+#: on a car worth millions of naira, carrying the reference the customer
+#: quotes at the branch. The success sheet says "We have emailed you the
+#: details" — and it must be true.
 RESERVATION_CONFIRMED = _spec(
     key="sales.reservation_confirmed",
     category=NotificationCategory.sales,
@@ -143,6 +158,7 @@ RESERVATION_CONFIRMED = _spec(
     body="The {vehicle_label} is held for you at {branch} until {hold_until}.",
     deep_link="/reservations",
     channels=(IN_APP, PUSH, EMAIL),
+    force=True,
     requires=("vehicle_label", "branch", "hold_until"),
 )
 

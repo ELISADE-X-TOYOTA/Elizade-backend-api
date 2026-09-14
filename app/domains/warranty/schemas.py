@@ -135,6 +135,12 @@ class WarrantyCertificateOut(BaseModel):
     type: str
     status: str
     customerName: str
+    #: The vehicle this certificate covers. Without it the app could only name
+    #: the car — and a claim needs the id. So the claim form was wired to a
+    #: hardcoded sample vehicle instead, and every claim filed from a real
+    #: phone was rejected as "not a valid identifier".
+    ownedVehicleId: str
+    vin: str
     vehicleLabel: str
     coverageStart: str
     coverageEnd: str
@@ -151,6 +157,8 @@ class WarrantyCertificateOut(BaseModel):
             type=row.type.value,
             status=row.status.value,
             customerName=customer_name,
+            ownedVehicleId=row.owned_vehicle_id,
+            vin=vehicle.vin,
             vehicleLabel=vehicle_label,
             coverageStart=row.coverage_start.isoformat(),
             coverageEnd=row.coverage_end.isoformat(),
