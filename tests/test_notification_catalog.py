@@ -46,13 +46,24 @@ def test_every_category_is_a_real_enum_member():
         assert isinstance(event.category, NotificationCategory)
 
 
-def test_only_security_and_safety_events_bypass_preferences():
-    """`force` overrides a customer's choice, so it must stay a short list."""
+def test_only_security_safety_and_receipts_bypass_preferences():
+    """`force` overrides a customer's choice, so it must stay a short list.
+
+    Three kinds of thing earn a place on it: security notices, safety recalls,
+    and receipts for something the customer just asked for. The last kind was
+    added after a tester with sales email switched off requested four
+    quotations and a reservation and received none of them, while the screen
+    promised an email each time. Adding anything else here needs a reason of
+    that weight — a preference that can be overridden for convenience is not a
+    preference.
+    """
     forced = {e.key for e in catalog.ALL_EVENTS if e.force}
     assert forced == {
         "auth.new_device_sign_in",
         "auth.contact_details_changed",
         "warranty.recall_affects_vehicle",
+        "sales.quotation_issued",
+        "sales.reservation_confirmed",
     }
 
 

@@ -140,3 +140,23 @@ def test_the_in_app_notification_stays_short(db_session, customer_user, vehicle,
 
     assert "2,000,000" not in row.body
     assert len(row.body) < 200, row.body
+
+
+def test_the_receipt_ignores_the_sales_opt_out(db_session, customer_user, vehicle, outbox):
+    """"We have emailed you the details" has to be true for everyone.
+
+    The 12 September tester who lost four quotations to their sales opt-out
+    lost their reservation receipt the same way — the one carrying the
+    reference they would quote at the branch. A hold on a car is not a sales
+    notification the customer can be said to have declined.
+    """
+    from app.domains.notifications.models import NotificationPreference
+    from app.domains.shared.enums import NotificationCategory
+
+    db_session.add(NotificationPreference(
+        user_id=customer_user.id, category=NotificationCategory.sales, channel="email", enabled=False,
+    ))
+    db_session.commit()
+
+    _reserve(db_session, customer_user, vehicle)
+    assert len(outbox) == 1, "the reservation receipt was suppressed by a sales preference"
