@@ -1,10 +1,10 @@
-from app.core.config import DEFAULT_FROM_EMAIL, Settings, get_settings
+from app.core.config import Settings, get_settings
 
 
-def test_meristem_from_address_is_rewritten_to_elizade(monkeypatch):
+def test_meristem_from_address_is_used_as_configured(monkeypatch):
     monkeypatch.setenv("SMTP_FROM_EMAIL", "noreply@meristemng.com")
     get_settings.cache_clear()
-    assert Settings().smtp_from_email == DEFAULT_FROM_EMAIL
+    assert Settings().smtp_from_email == "noreply@meristemng.com"
     get_settings.cache_clear()
 
 
