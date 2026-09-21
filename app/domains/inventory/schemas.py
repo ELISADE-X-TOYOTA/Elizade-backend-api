@@ -36,6 +36,7 @@ class VehicleListItemOut(BaseModel):
     transmission: str
     availability: str
     branchId: str
+    category: str | None = None
     primaryImageUrl: str | None = None
     createdAt: str
 
@@ -74,6 +75,7 @@ class VehicleDetailOut(BaseModel):
     branchCity: str
     branchState: str
     specs: dict
+    category: str | None = None
     images: list[VehicleImageOut]
     createdAt: str
     updatedAt: str | None = None
@@ -144,6 +146,7 @@ class VehicleAdminDetailOut(BaseModel):
     branchCity: str
     branchState: str
     specs: dict
+    category: str | None = None
     images: list[VehicleImageOut]
     isPublished: bool
     publishedAt: str | None = None
@@ -175,6 +178,7 @@ class VehicleCreateIn(BaseModel):
     availability: str = "available"
     branch_id: str = Field(alias="branchId")
     specs: dict = Field(default_factory=dict)
+    category: str | None = None
     is_published: bool = Field(default=True, alias="isPublished")
     published_at: Annotated[datetime | None, Field(alias="publishedAt")] = None
 
@@ -202,6 +206,7 @@ class VehicleUpdateIn(BaseModel):
     mileage: int | None = Field(default=None, ge=0)
     branch_id: Annotated[str | None, Field(alias="branchId")] = None
     specs: dict | None = None
+    category: str | None = None
     is_published: Annotated[bool | None, Field(alias="isPublished")] = None
     published_at: Annotated[datetime | None, Field(alias="publishedAt")] = None
 

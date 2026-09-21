@@ -107,6 +107,35 @@ def _to_image_out(image: VehicleImage) -> VehicleImageOut:
     )
 
 
+VEHICLE_CATEGORIES = frozenset({"suv", "sedan", "electric", "luxury", "sports", "pickup", "truck"})
+
+
+def _category_from_specs(vehicle: Vehicle) -> str | None:
+    """Admin-set body type, stored on `specs.category` until a dedicated column exists."""
+    raw = (vehicle.specs or {}).get("category")
+    if not isinstance(raw, str):
+        return None
+    value = raw.strip().lower()
+    return value if value in VEHICLE_CATEGORIES else None
+
+
+def _apply_category(specs: dict | None, category: str | None) -> dict:
+    merged = dict(specs or {})
+    if category is None:
+        return merged
+    if not category.strip():
+        merged.pop("category", None)
+        return merged
+    value = category.strip().lower()
+    if value not in VEHICLE_CATEGORIES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid category. Allowed: {', '.join(sorted(VEHICLE_CATEGORIES))}",
+        )
+    merged["category"] = value
+    return merged
+
+
 def _to_list_item(vehicle: Vehicle) -> VehicleListItemOut:
     return VehicleListItemOut(
         id=vehicle.id,
@@ -124,6 +153,7 @@ def _to_list_item(vehicle: Vehicle) -> VehicleListItemOut:
         transmission=vehicle.transmission,
         availability=vehicle.availability.value,
         branchId=vehicle.branch_id,
+        category=_category_from_specs(vehicle),
         primaryImageUrl=_primary_image_url(vehicle),
         createdAt=_iso(vehicle.created_at),
     )
@@ -153,6 +183,7 @@ def _to_detail(vehicle: Vehicle) -> VehicleDetailOut:
         branchCity=branch.city if branch else "",
         branchState=branch.state if branch else "",
         specs=vehicle.specs or {},
+        category=_category_from_specs(vehicle),
         images=[_to_image_out(img) for img in vehicle.images],
         createdAt=_iso(vehicle.created_at),
         updatedAt=_iso(vehicle.updated_at),
@@ -183,6 +214,8 @@ def list_vehicles(
     fuel_type: str | None = None,
     transmission: str | None = None,
     availability: str | None = None,
+    year: int | None = None,
+    category: str | None = None,
     page: int = 1,
     limit: int = 20,
     sort: str = "-createdAt",
@@ -227,6 +260,16 @@ def list_vehicles(
         query = query.filter(Vehicle.fuel_type.ilike(f"%{fuel_type}%"))
     if transmission:
         query = query.filter(Vehicle.transmission.ilike(f"%{transmission}%"))
+    if year is not None:
+        query = query.filter(Vehicle.year == year)
+    if category:
+        value = category.strip().lower()
+        if value not in VEHICLE_CATEGORIES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid category. Allowed: {', '.join(sorted(VEHICLE_CATEGORIES))}",
+            )
+        query = query.filter(Vehicle.specs["category"].astext == value)
 
     min_dec = _to_decimal(min_price, "minPrice")
     max_dec = _to_decimal(max_price, "maxPrice")
@@ -344,6 +387,7 @@ def _to_admin_detail(vehicle: Vehicle) -> VehicleAdminDetailOut:
         branchCity=branch.city if branch else "",
         branchState=branch.state if branch else "",
         specs=vehicle.specs or {},
+        category=_category_from_specs(vehicle),
         images=[_to_image_out(img) for img in vehicle.images],
         isPublished=vehicle.is_published,
         publishedAt=_iso(vehicle.published_at),
@@ -631,7 +675,7 @@ def _persist_new_vehicle(db: Session, payload: VehicleCreateIn, current_user: Us
         mileage=payload.mileage,
         availability=availability,
         branch_id=payload.branch_id,
-        specs=payload.specs or {},
+        specs=_apply_category(payload.specs, payload.category),
         is_published=payload.is_published,
         published_at=published_at,
         created_by_id=current_user.id,
@@ -651,6 +695,8 @@ def create_vehicle(db: Session, payload: VehicleCreateIn, current_user: User) ->
 def update_vehicle(db: Session, vehicle_id: str, payload: VehicleUpdateIn) -> VehicleAdminDetailOut:
     vehicle = _get_admin_vehicle(db, vehicle_id)
     data = payload.model_dump(exclude_unset=True)
+    incoming_category = data.pop("category", None)
+    category_set = "category" in payload.model_fields_set
 
     if "published_at" in data:
         data["published_at"] = _normalize_publish_at(data["published_at"])
@@ -661,6 +707,12 @@ def update_vehicle(db: Session, vehicle_id: str, payload: VehicleUpdateIn) -> Ve
         _assert_vin_unique(db, data["vin"], exclude_id=vehicle.id)
     if data.get("stock_number"):
         _assert_stock_unique(db, data["stock_number"], exclude_id=vehicle.id)
+
+    if category_set or "specs" in data:
+        data["specs"] = _apply_category(
+            data.get("specs", vehicle.specs),
+            incoming_category if category_set else None,
+        )
 
     # A GUARD, NOT A FIX. `VehicleUpdateIn` exposes no `availability` field
     # today, so this branch is unreachable and no notification was ever missed
@@ -877,6 +929,7 @@ _BULK_COLUMN_MAP = {
     "is_published": "isPublished",
     "publishedat": "publishedAt",
     "published_at": "publishedAt",
+    "category": "category",
 }
 
 BULK_IMPORT_TEMPLATE_COLUMNS = [
