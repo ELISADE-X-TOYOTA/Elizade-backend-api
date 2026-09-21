@@ -56,17 +56,25 @@ class Settings(BaseSettings):
     #: than leaving it to a customer to notice.
     smtp_from_email: str = DEFAULT_FROM_EMAIL
     smtp_use_tls: bool = True
+    #: When true, rewrite vendor-domain SMTP_FROM_EMAIL to DEFAULT_FROM_EMAIL.
+    #: OFF by default: Postmark only delivers from verified Sender Signatures.
+    enforce_elizade_from_email: bool = False
 
     @field_validator("smtp_from_email", mode="before")
     @classmethod
     def brand_from_address(cls, value: object) -> str:
+        import os
+
         raw = str(value or "").strip() or DEFAULT_FROM_EMAIL
         if "@" not in raw:
             return DEFAULT_FROM_EMAIL
         domain = raw.rsplit("@", 1)[1].lower()
-        if domain in VENDOR_SENDER_DOMAINS:
-            # Railway still carries the vendor address. Rewriting here is the
-            # only way a deploy fixes OTP From without waiting on that env var.
+        enforce = os.environ.get("ENFORCE_ELIZADE_FROM_EMAIL", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        if enforce and domain in VENDOR_SENDER_DOMAINS:
             return DEFAULT_FROM_EMAIL
         return raw
 
