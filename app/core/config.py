@@ -1,5 +1,13 @@
 from functools import lru_cache
+
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Vendor domains that must never appear as the From line on customer mail.
+# Production still has SMTP_FROM_EMAIL=noreply@meristemng.com on Railway;
+# that env var wins over the default below unless we rewrite it here.
+VENDOR_SENDER_DOMAINS = frozenset({"meristemng.com", "meristem.com"})
+DEFAULT_FROM_EMAIL = "noreply@elizade.net"
 
 
 class Settings(BaseSettings):
@@ -46,8 +54,21 @@ class Settings(BaseSettings):
     #: sender in Postmark, with SPF and DKIM published for the domain, or mail
     #: stops going out entirely. `mail_sender_warning()` says so at boot rather
     #: than leaving it to a customer to notice.
-    smtp_from_email: str = "noreply@elizade.net"
+    smtp_from_email: str = DEFAULT_FROM_EMAIL
     smtp_use_tls: bool = True
+
+    @field_validator("smtp_from_email", mode="before")
+    @classmethod
+    def brand_from_address(cls, value: object) -> str:
+        raw = str(value or "").strip() or DEFAULT_FROM_EMAIL
+        if "@" not in raw:
+            return DEFAULT_FROM_EMAIL
+        domain = raw.rsplit("@", 1)[1].lower()
+        if domain in VENDOR_SENDER_DOMAINS:
+            # Railway still carries the vendor address. Rewriting here is the
+            # only way a deploy fixes OTP From without waiting on that env var.
+            return DEFAULT_FROM_EMAIL
+        return raw
 
     # Populate the database with demo content (30 vehicles, sample customers,
     # tickets, appointments) on boot. OFF by default: seeding is a development
