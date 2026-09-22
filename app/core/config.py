@@ -35,19 +35,11 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     #: The From address on every transactional email.
     #:
-    #: The default WAS `noreply@meristemng.com` — the build vendor's domain,
-    #: baked into the product as the fallback for any environment that forgot
-    #: to set it. Customers saw "Meristem" on their Elizade sign-in codes, and
-    #: nothing in the system considered that worth mentioning.
-    #:
-    #: elizade.NET, not .com — the company's site is elizade.net, and the
-    #: earlier default here guessed the wrong TLD.
-    #:
-    #: Changing this is NOT enough on its own: the address has to be a verified
-    #: sender in Postmark, with SPF and DKIM published for the domain, or mail
-    #: stops going out entirely. `mail_sender_warning()` says so at boot rather
-    #: than leaving it to a customer to notice.
-    smtp_from_email: str = "noreply@meristemng.com"
+    #: Official Elizade sender for OTP and other transactional mail.
+    #: Must be a verified Postmark Sender Signature (SPF + DKIM on elizade.net)
+    #: or delivery fails with 502 on sign-in. `mail_sender_warning()` logs that
+    #: at boot when the From domain does not look like elizade.net.
+    smtp_from_email: str = "info@elizade.net"
     smtp_use_tls: bool = True
 
     # Populate the database with demo content (30 vehicles, sample customers,
