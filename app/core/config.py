@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     #: Must be a verified Postmark Sender Signature (SPF + DKIM on elizade.net)
     #: or delivery fails with 502 on sign-in. `mail_sender_warning()` logs that
     #: at boot when the From domain does not look like elizade.net.
-    smtp_from_email: str = "elizade@elizade.net"
+    smtp_from_email: str = "info@elizade.net"
     smtp_use_tls: bool = True
 
     # Populate the database with demo content (30 vehicles, sample customers,
