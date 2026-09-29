@@ -80,7 +80,7 @@ def main() -> int:
         )
     except EmailDeliveryError as exc:
         print(f"\nSend failed: {exc}", file=sys.stderr)
-        print("If Postmark rejected the From address, verify elizade@elizade.net in Postmark.", file=sys.stderr)
+        print("If Postmark rejected the From address, verify info@elizade.net in Postmark.", file=sys.stderr)
         return 1
 
     print(f"\nOK — request accepted by Postmark/SMTP for {args.to}.")
