@@ -108,13 +108,17 @@ TEST_DRIVE_CONFIRMED = _spec(
     requires=("vehicle_label", "when", "branch"),
 )
 
+#: EMAIL added alongside in-app and push. A cancellation is the one event in
+#: this flow with nothing left on screen to look at afterwards — the booking
+#: leaves Upcoming — so the mail is the customer's only durable record that
+#: the slot was released, and the only one they can forward to the branch.
 TEST_DRIVE_CANCELLED = _spec(
     key="sales.test_drive_cancelled",
     category=NotificationCategory.sales,
     title="Test drive cancelled",
     body="Your test drive of the {vehicle_label} has been cancelled. Book another time whenever suits you.",
     deep_link="/(tabs)/bookings",
-    channels=(IN_APP, PUSH),
+    channels=(IN_APP, PUSH, EMAIL),
     requires=("vehicle_label",),
 )
 

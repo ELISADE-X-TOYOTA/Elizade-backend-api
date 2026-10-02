@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.domains.branches.models import Branch
 from app.domains.inventory.models import Vehicle
 from app.domains.inventory import service as inventory_service
-from app.domains.leads.models import Lead
+from app.domains.leads.models import Lead, LeadStatusEvent
 from app.domains.notifications import catalog
 from app.domains.notifications.notify import safe_notify
 from app.domains.sales.models import Quotation, QuotationLineItem, Reservation, TestDriveBooking, TradeInRequest
@@ -512,6 +512,12 @@ def change_test_drive_status(
     else:
         booking.status = TestDriveStatus.completed
 
+    # Before the commit, so the booking and its lead move together or not at
+    # all — a completed drive whose lead stayed on step one is the defect
+    # this closes, and doing it in a second transaction would reintroduce it
+    # on any failure in between.
+    _sync_lead_for_test_drive(db, booking, booking.status)
+
     db.commit()
     db.refresh(booking)
     booking = _load_test_drive(db, booking_id)
@@ -535,6 +541,38 @@ def change_test_drive_status(
     return TestDriveOut.from_model(booking)
 
 
+def _sync_lead_for_test_drive(db: Session, booking: TestDriveBooking, outcome: TestDriveStatus) -> None:
+    """Move the booking's lead to match what happened to the booking.
+
+    THE LEAD USED TO SIT STILL. A test drive could be completed or cancelled
+    and its lead stayed on `new`, so "My Leads" showed a cancelled booking as
+    a live enquiry on step one forever, and a completed one never reached
+    Converted. The two records described the same event and disagreed.
+
+    Only forward: a lead a human has already pushed to `won` or `lost` is not
+    dragged back by a booking transition, and a lead already past `new`
+    because an agent is working it is not reset.
+    """
+    lead = booking.lead
+    if lead is None or lead.status in (LeadStatus.won, LeadStatus.lost):
+        return
+
+    if outcome is TestDriveStatus.completed:
+        new_status = LeadStatus.won
+        lead.won_at = datetime.now(timezone.utc)
+    elif outcome is TestDriveStatus.cancelled:
+        new_status = LeadStatus.lost
+        lead.lost_at = datetime.now(timezone.utc)
+        lead.lost_reason = "Test drive cancelled"
+    else:
+        return
+
+    lead.status = new_status
+    # Recorded so the customer's tracker can date the step, the same way the
+    # admin write sites do. Without it the stage changes with no history.
+    db.add(LeadStatusEvent(lead_id=lead.id, status=new_status, actor_id=None))
+
+
 def cancel_my_test_drive(db: Session, user: User, booking_id: str) -> TestDriveOut:
     """A customer calling off their own test drive.
 
@@ -554,9 +592,23 @@ def cancel_my_test_drive(db: Session, user: User, booking_id: str) -> TestDriveO
         )
 
     booking.status = TestDriveStatus.cancelled
+    _sync_lead_for_test_drive(db, booking, TestDriveStatus.cancelled)
     db.commit()
     booking = _load_test_drive(db, booking_id)
 
-    # No notification back to the customer who just pressed cancel — they were
-    # there. The branch learns from the booking list.
+    # THIS USED TO SEND NOTHING, reasoning that someone who just pressed
+    # cancel does not need telling. That holds right up until the cancel was
+    # a mis-tap, or two people share the account, or the branch asks what
+    # happened — and then there is no record the customer can point at. It
+    # is also the only confirmation that the slot was actually released.
+    #
+    # `safe_notify` because the booking is already cancelled: a mail failure
+    # must not turn a completed cancellation into an error the customer
+    # retries.
+    safe_notify(
+        db,
+        user=booking.user,
+        event=catalog.TEST_DRIVE_CANCELLED,
+        context={"vehicle_label": _test_drive_context(booking)["vehicle_label"]},
+    )
     return TestDriveOut.from_model(booking)

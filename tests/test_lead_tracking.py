@@ -217,3 +217,76 @@ def test_lead_note_defaults_to_private():
 
     assert LeadNote.__table__.c.is_customer_visible.default.arg is False
     assert LeadNote.__table__.c.is_customer_visible.nullable is False
+
+
+# ── What KIND of enquiry this is ─────────────────────────────────────────
+#
+# Every lead is created with source="Mobile app" and a free-text note, so
+# "My Leads" showed rows that differed only by vehicle: a customer who had
+# booked a test drive, asked for a quote and reserved a car saw three
+# identical-looking entries.
+
+
+def test_a_test_drive_lead_says_it_is_a_test_drive(client, customer_headers, customer_user, db_session, vehicle_factory, branch):
+    from datetime import datetime, timedelta, timezone
+    from app.domains.shared.enums import AvailabilityStatus
+
+    v = vehicle_factory(make="Toyota", model="Hilux", year=2024, availability=AvailabilityStatus.available)
+    created = client.post(
+        "/api/v1/sales/test-drives",
+        headers=customer_headers,
+        json={
+            "vehicleId": v.id,
+            "branchId": branch.id,
+            "scheduledAt": (datetime.now(timezone.utc) + timedelta(days=2)).isoformat(),
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    rows = client.get("/api/v1/leads", headers=customer_headers).json()
+    mine = [r for r in rows if "Hilux" in r["interestedModel"]]
+    assert mine, "the test drive created no visible lead"
+    assert mine[0]["kind"] == "test_drive"
+    assert mine[0]["kindLabel"] == "Test Drive"
+
+
+def test_a_quotation_lead_says_it_is_a_quote(client, customer_headers, vehicle_factory):
+    from decimal import Decimal
+    from app.domains.shared.enums import AvailabilityStatus
+
+    v = vehicle_factory(
+        make="Toyota", model="Prado", year=2024,
+        price=Decimal("77000000.00"), availability=AvailabilityStatus.available,
+    )
+    assert client.post(
+        "/api/v1/sales/quotations", headers=customer_headers, json={"vehicleId": v.id}
+    ).status_code in (200, 201)
+
+    rows = client.get("/api/v1/leads", headers=customer_headers).json()
+    mine = [r for r in rows if "Prado" in r["interestedModel"]]
+    assert mine and mine[0]["kind"] == "quotation", mine
+    assert mine[0]["kindLabel"] == "Quote"
+
+
+def test_the_detail_view_carries_the_kind_too(client, customer_headers, vehicle_factory, branch):
+    """The detail screen used to get its chip from the route that opened it,
+    so it was right from Bookings and blank from anywhere else."""
+    from datetime import datetime, timedelta, timezone
+    from app.domains.shared.enums import AvailabilityStatus
+
+    v = vehicle_factory(make="Toyota", model="Avanza", year=2023, availability=AvailabilityStatus.available)
+    client.post(
+        "/api/v1/sales/test-drives",
+        headers=customer_headers,
+        json={
+            "vehicleId": v.id,
+            "branchId": branch.id,
+            "scheduledAt": (datetime.now(timezone.utc) + timedelta(days=2)).isoformat(),
+        },
+    )
+    rows = client.get("/api/v1/leads", headers=customer_headers).json()
+    lead_id = [r for r in rows if "Avanza" in r["interestedModel"]][0]["id"]
+
+    detail = client.get(f"/api/v1/leads/{lead_id}", headers=customer_headers).json()
+    assert detail["kind"] == "test_drive"
+    assert detail["kindLabel"] == "Test Drive"

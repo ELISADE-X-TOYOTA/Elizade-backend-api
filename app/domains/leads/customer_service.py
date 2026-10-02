@@ -25,6 +25,7 @@ from app.domains.leads.customer_schemas import (
     LeadTrackerStepOut,
     LeadVehicleBrief,
 )
+from app.domains.leads.kinds import KIND_LABELS, LeadKind, resolve_kinds
 from app.domains.leads.models import Lead, LeadNote, LeadStatusEvent
 from app.domains.leads.tracking import (
     STAGE_LABELS,
@@ -38,12 +39,14 @@ from app.domains.leads.tracking import (
 from app.domains.shared.enums import LeadStatus
 
 
-def _base_row(lead: Lead) -> dict:
+def _base_row(lead: Lead, kind: LeadKind) -> dict:
     stage = to_stage(lead.status)
     idx = step_index(stage)
     return {
         "id": lead.id,
         "interestedModel": lead.interested_model,
+        "kind": kind,
+        "kindLabel": KIND_LABELS[kind],
         "stage": stage,
         "stageLabel": STAGE_LABELS[stage],
         "stageDescription": _description(stage),
@@ -92,7 +95,8 @@ def list_my_leads(db: Session, user_id: str) -> list[CustomerLeadOut]:
         .scalars()
         .all()
     )
-    return [CustomerLeadOut(**_base_row(lead)) for lead in rows]
+    kinds = resolve_kinds(db, [lead.id for lead in rows])
+    return [CustomerLeadOut(**_base_row(lead, kinds[lead.id])) for lead in rows]
 
 
 def get_my_lead(db: Session, user_id: str, lead_id: str) -> CustomerLeadDetailOut:
@@ -153,7 +157,7 @@ def get_my_lead(db: Session, user_id: str, lead_id: str) -> CustomerLeadDetailOu
         lost_at=lead.lost_at,
     )
 
-    row = _base_row(lead)
+    row = _base_row(lead, resolve_kinds(db, [lead.id])[lead.id])
     current_index = row["stepIndex"]
     stage = row["stage"]
     tracker = [

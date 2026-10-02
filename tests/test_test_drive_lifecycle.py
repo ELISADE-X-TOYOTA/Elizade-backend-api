@@ -218,3 +218,84 @@ def test_the_cancelled_booking_leaves_the_upcoming_list(client, customer_headers
     listed = client.get(f"{SALES}/test-drives", headers=customer_headers).json()
     row = next(b for b in listed if b["id"] == booking["id"])
     assert row["status"] == "cancelled"
+
+
+# ── The lead must move with the booking ──────────────────────────────────
+#
+# The booking and its lead describe the same event, and they used to
+# disagree: a cancelled test drive left its lead on `new`, so "My Leads"
+# showed it as a live enquiry on step one forever, and a completed drive
+# never reached Converted.
+
+
+def _lead_of(db_session, booking_id):
+    from app.domains.leads.models import Lead
+
+    db_session.expire_all()
+    row = db_session.get(TestDriveBooking, booking_id)
+    return db_session.get(Lead, row.lead_id)
+
+
+def test_completing_a_test_drive_converts_its_lead(client, staff_headers, booking, db_session):
+    from app.domains.shared.enums import LeadStatus
+
+    res = client.patch(
+        f"{SALES}/test-drives/{booking['id']}/status",
+        headers=staff_headers,
+        json={"action": "complete"},
+    )
+    assert res.status_code == 200, res.text
+
+    lead = _lead_of(db_session, booking["id"])
+    assert lead.status is LeadStatus.won, "a completed test drive should convert its lead"
+    assert lead.won_at is not None
+
+
+def test_customer_cancelling_closes_its_lead(client, customer_headers, booking, db_session):
+    from app.domains.shared.enums import LeadStatus
+
+    res = client.post(
+        f"{SALES}/test-drives/{booking['id']}/cancel", headers=customer_headers
+    )
+    assert res.status_code == 200, res.text
+
+    lead = _lead_of(db_session, booking["id"])
+    assert lead.status is LeadStatus.lost, "a cancelled booking must leave the active pipeline"
+    assert lead.lost_at is not None
+
+
+def test_staff_cancelling_closes_its_lead(client, staff_headers, booking, db_session):
+    from app.domains.shared.enums import LeadStatus
+
+    client.patch(
+        f"{SALES}/test-drives/{booking['id']}/status",
+        headers=staff_headers,
+        json={"action": "cancel"},
+    )
+    assert _lead_of(db_session, booking["id"]).status is LeadStatus.lost
+
+
+def test_a_lead_a_human_already_closed_is_not_dragged_back(
+    client, staff_headers, booking, db_session
+):
+    """Forward only. An agent's decision outranks a booking transition."""
+    from app.domains.leads.models import Lead
+    from app.domains.shared.enums import LeadStatus
+
+    lead = _lead_of(db_session, booking["id"])
+    lead.status = LeadStatus.won
+    db_session.commit()
+
+    client.patch(
+        f"{SALES}/test-drives/{booking['id']}/status",
+        headers=staff_headers,
+        json={"action": "cancel"},
+    )
+    assert _lead_of(db_session, booking["id"]).status is LeadStatus.won
+
+
+def test_cancelling_now_tells_the_customer(client, customer_headers, booking, db_session, customer_user):
+    """It used to send nothing at all — see cancel_my_test_drive."""
+    before = len(_alerts(db_session, customer_user, "cancel"))
+    client.post(f"{SALES}/test-drives/{booking['id']}/cancel", headers=customer_headers)
+    assert len(_alerts(db_session, customer_user, "cancel")) == before + 1

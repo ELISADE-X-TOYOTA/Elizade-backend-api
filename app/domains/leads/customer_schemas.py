@@ -14,6 +14,7 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
+from app.domains.leads.kinds import LeadKind
 from app.domains.leads.tracking import TrackingStage
 
 
@@ -61,6 +62,10 @@ class CustomerLeadOut(BaseModel):
 
     id: str
     interestedModel: str
+    #: How this enquiry began — test drive, quote, reservation, trade-in.
+    #: Resolved from the row that created the lead; see `leads/kinds.py`.
+    kind: LeadKind
+    kindLabel: str
     stage: TrackingStage
     stageLabel: str
     stageDescription: str
