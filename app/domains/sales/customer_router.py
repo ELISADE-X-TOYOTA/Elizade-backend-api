@@ -113,3 +113,22 @@ def cancel_my_test_drive(
     way to say so and the branch went on holding the slot.
     """
     return service.cancel_my_test_drive(db, current_user, booking_id)
+
+
+@router.post("/reservations/{reservation_id}/cancel", response_model=ReservationOut)
+def cancel_my_reservation(
+    reservation_id: str,
+    current_user: CustomerUser,
+    db: Session = Depends(get_db),
+) -> ReservationOut:
+    """Release your own hold on a vehicle.
+
+    A reservation could previously be created and then only ended by the
+    seven-day timeout, so a customer who changed their mind kept a car off
+    the showroom for a week with no way to say otherwise.
+
+    Only a `pending` hold — one with no money against it — can be released
+    this way. A paid or confirmed reservation is a refund conversation with
+    the branch, and answers 409 with that instruction.
+    """
+    return service.cancel_my_reservation(db, current_user, reservation_id)

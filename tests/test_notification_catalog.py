@@ -64,6 +64,11 @@ def test_only_security_safety_and_receipts_bypass_preferences():
         "warranty.recall_affects_vehicle",
         "sales.quotation_issued",
         "sales.reservation_confirmed",
+        # The counterpart to the one above: releasing a hold on a car worth
+        # millions is as much a receipt as taking it out. If the release was a
+        # mistake, or somebody sharing the account did it, this is the only
+        # thing that tells them.
+        "sales.reservation_cancelled",
     }
 
 

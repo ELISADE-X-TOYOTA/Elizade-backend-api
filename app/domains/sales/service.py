@@ -612,3 +612,95 @@ def cancel_my_test_drive(db: Session, user: User, booking_id: str) -> TestDriveO
         context={"vehicle_label": _test_drive_context(booking)["vehicle_label"]},
     )
     return TestDriveOut.from_model(booking)
+
+
+#: Holds a customer may release themselves. `deposit_paid` and `confirmed`
+#: represent money taken or a sale agreed — releasing those is a refund
+#: conversation with the branch, not a button. Same line the expiry sweep
+#: draws, and for the same reason.
+_CUSTOMER_CANCELLABLE = (ReservationStatus.pending,)
+
+#: Still-live holds that keep a vehicle off the market.
+_ACTIVE_RESERVATION = (
+    ReservationStatus.pending,
+    ReservationStatus.deposit_paid,
+    ReservationStatus.confirmed,
+)
+
+
+def cancel_my_reservation(db: Session, user: User, reservation_id: str) -> ReservationOut:
+    """A customer releasing their own hold.
+
+    THERE WAS NO WAY TO LET GO. A reservation could be created and then only
+    ended by the seven-day timeout, so a customer who changed their mind kept
+    a car off the showroom for a week and could not say otherwise — and the
+    car stayed `reserved` for everyone else that whole time.
+
+    The vehicle is released on the same terms the expiry sweep uses: only
+    when NO other active hold remains on it, and only from `reserved` —
+    a car marked `sold` is gone and a cancellation does not walk that back.
+    """
+    reservation = (
+        db.query(Reservation)
+        .options(joinedload(Reservation.vehicle))
+        .filter(Reservation.id == reservation_id)
+        .first()
+    )
+    # 404 rather than 403 throughout: whether someone else's reservation
+    # exists is not this customer's business.
+    if reservation is None or reservation.user_id != user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Reservation not found")
+
+    if reservation.status not in _CUSTOMER_CANCELLABLE:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This reservation can no longer be cancelled in the app. "
+                "Please contact the branch holding it."
+            ),
+        )
+
+    reservation.status = ReservationStatus.cancelled
+
+    # Looked up by id: Reservation records `lead_id` but declares no
+    # relationship for it, unlike TestDriveBooking.
+    lead = db.get(Lead, reservation.lead_id) if reservation.lead_id else None
+    if lead is not None and lead.status not in (LeadStatus.won, LeadStatus.lost):
+        lead.status = LeadStatus.lost
+        lead.lost_at = datetime.now(timezone.utc)
+        lead.lost_reason = "Reservation cancelled"
+        db.add(LeadStatusEvent(lead_id=lead.id, status=LeadStatus.lost, actor_id=None))
+
+    # Flushed before the "is it still held?" question below, or the hold being
+    # cancelled still counts itself and the car is never released.
+    db.flush()
+
+    vehicle = reservation.vehicle
+    if vehicle is not None:
+        still_held = (
+            db.query(Reservation)
+            .filter(
+                Reservation.vehicle_id == vehicle.id,
+                Reservation.status.in_(_ACTIVE_RESERVATION),
+            )
+            .first()
+        )
+        if still_held is None and vehicle.availability == AvailabilityStatus.reserved:
+            # Through `set_availability` so Notify Me subscribers hear about
+            # it — a car coming back on sale is the moment they signed up for.
+            # strict_notify=False: a mail failure must not undo a cancellation
+            # the customer has already been told succeeded.
+            inventory_service.set_availability(
+                db, vehicle, AvailabilityStatus.available, strict_notify=False
+            )
+
+    db.commit()
+    db.refresh(reservation)
+
+    safe_notify(
+        db,
+        user=user,
+        event=catalog.RESERVATION_CANCELLED,
+        context={"vehicle_label": _vehicle_label(reservation.vehicle) if reservation.vehicle else "vehicle"},
+    )
+    return ReservationOut.from_model(reservation)

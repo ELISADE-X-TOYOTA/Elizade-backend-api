@@ -166,6 +166,24 @@ RESERVATION_CONFIRMED = _spec(
     requires=("vehicle_label", "branch", "hold_until"),
 )
 
+#: The receipt for GIVING UP a hold, and the counterpart to the one above.
+#:
+#: Forced for the same reason: the hold is on a car worth millions of naira
+#: and the customer has just released it. If they released it by mistake —
+#: or somebody sharing the account did — this mail is the only thing that
+#: tells them, and the only record that the car went back on sale. A sales
+#: preference is not consent to lose that.
+RESERVATION_CANCELLED = _spec(
+    key="sales.reservation_cancelled",
+    category=NotificationCategory.sales,
+    title="Reservation cancelled",
+    body="Your hold on the {vehicle_label} has been released. Reserve it again any time it is still available.",
+    deep_link="/reservations",
+    channels=(IN_APP, PUSH, EMAIL),
+    force=True,
+    requires=("vehicle_label",),
+)
+
 TRADE_IN_VALUED = _spec(
     key="sales.trade_in_valued",
     category=NotificationCategory.sales,
@@ -376,6 +394,7 @@ ALL_EVENTS: tuple[EventSpec, ...] = (
     TEST_DRIVE_CANCELLED,
     QUOTATION_ISSUED,
     RESERVATION_CONFIRMED,
+    RESERVATION_CANCELLED,
     TRADE_IN_VALUED,
     WATCHED_MODEL_AVAILABLE,
     SERVICE_APPOINTMENT_REQUESTED,

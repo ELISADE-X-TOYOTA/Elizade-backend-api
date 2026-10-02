@@ -160,3 +160,114 @@ def test_the_receipt_ignores_the_sales_opt_out(db_session, customer_user, vehicl
 
     _reserve(db_session, customer_user, vehicle)
     assert len(outbox) == 1, "the reservation receipt was suppressed by a sales preference"
+
+
+# ── Releasing a hold ─────────────────────────────────────────────────────
+#
+# A reservation could be created and then only ended by the seven-day
+# timeout, so a customer who changed their mind kept a car off the showroom
+# for a week with no way to say otherwise.
+
+from datetime import datetime, timedelta, timezone
+
+from app.domains.inventory.models import Vehicle
+from app.domains.sales.models import Reservation
+from app.domains.shared.enums import AvailabilityStatus, LeadStatus, ReservationStatus
+
+SALES = "/api/v1/sales"
+
+
+def _reserve_via_api(client, headers, vehicle):
+    res = client.post(
+        f"{SALES}/reservations",
+        headers=headers,
+        json={"vehicleId": vehicle.id, "depositAmount": "2000000"},
+    )
+    assert res.status_code == 201, res.text
+    return res.json()
+
+
+def test_cancelling_releases_the_vehicle(client, customer_headers, vehicle, db_session):
+    row = _reserve_via_api(client, customer_headers, vehicle)
+    db_session.expire_all()
+    assert db_session.get(Vehicle, vehicle.id).availability is AvailabilityStatus.reserved
+
+    res = client.post(f"{SALES}/reservations/{row['id']}/cancel", headers=customer_headers)
+    assert res.status_code == 200, res.text
+
+    db_session.expire_all()
+    assert db_session.get(Reservation, row["id"]).status is ReservationStatus.cancelled
+    assert db_session.get(Vehicle, vehicle.id).availability is AvailabilityStatus.available, (
+        "the car must go back on sale, or cancelling is worse than doing nothing"
+    )
+
+
+def test_cancelling_closes_the_lead(client, customer_headers, vehicle, db_session):
+    from app.domains.leads.models import Lead
+
+    row = _reserve_via_api(client, customer_headers, vehicle)
+    client.post(f"{SALES}/reservations/{row['id']}/cancel", headers=customer_headers)
+
+    db_session.expire_all()
+    lead_id = db_session.get(Reservation, row["id"]).lead_id
+    assert db_session.get(Lead, lead_id).status is LeadStatus.lost
+
+
+def test_cancelling_tells_the_customer(client, customer_headers, vehicle, outbox):
+    row = _reserve_via_api(client, customer_headers, vehicle)
+    before = len(outbox)
+    client.post(f"{SALES}/reservations/{row['id']}/cancel", headers=customer_headers)
+    assert len(outbox) == before + 1, "releasing a hold on a car worth millions must be acknowledged"
+
+
+def test_a_reservation_that_is_not_yours_is_a_404(client, customer_headers):
+    """Not a 403 — whether it exists is not this customer's business.
+
+    (Staff get 403 before reaching this code at all: the route is
+    customer-only, and the role gate answers first.)
+    """
+    import uuid
+
+    res = client.post(
+        f"{SALES}/reservations/{uuid.uuid4()}/cancel", headers=customer_headers
+    )
+    assert res.status_code == 404
+
+
+def test_cancelling_twice_is_refused(client, customer_headers, vehicle):
+    row = _reserve_via_api(client, customer_headers, vehicle)
+    assert client.post(f"{SALES}/reservations/{row['id']}/cancel", headers=customer_headers).status_code == 200
+    second = client.post(f"{SALES}/reservations/{row['id']}/cancel", headers=customer_headers)
+    assert second.status_code == 409
+
+
+def test_a_paid_hold_is_not_a_button(client, customer_headers, vehicle, db_session):
+    """Money taken is a refund conversation with the branch, not a tap."""
+    row = _reserve_via_api(client, customer_headers, vehicle)
+    db_session.expire_all()
+    held = db_session.get(Reservation, row["id"])
+    held.status = ReservationStatus.deposit_paid
+    db_session.commit()
+
+    res = client.post(f"{SALES}/reservations/{row['id']}/cancel", headers=customer_headers)
+    assert res.status_code == 409
+    assert "branch" in res.json()["detail"].lower()
+
+
+def test_a_second_hold_keeps_the_car_off_the_market(client, customer_headers, staff_headers, vehicle, db_session, staff_user):
+    """One hold lapsing must not release a car another still holds."""
+    mine = _reserve_via_api(client, customer_headers, vehicle)
+
+    other = Reservation(
+        user_id=staff_user.id,
+        vehicle_id=vehicle.id,
+        status=ReservationStatus.confirmed,
+        deposit_amount=0,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+    )
+    db_session.add(other)
+    db_session.commit()
+
+    client.post(f"{SALES}/reservations/{mine['id']}/cancel", headers=customer_headers)
+    db_session.expire_all()
+    assert db_session.get(Vehicle, vehicle.id).availability is AvailabilityStatus.reserved
