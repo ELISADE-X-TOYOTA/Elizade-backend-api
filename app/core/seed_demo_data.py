@@ -112,11 +112,11 @@ _BRANCHES = [
         "phone": "08012345678",
     },
     {
-        "name": "Elizade Ikeja",
+        "name": "Elizade Ogba",
         "type": BranchType.both,
-        "city": "Lagos",
+        "city": "Ogba",
         "state": "Lagos",
-        "address": "12 Obafemi Awolowo Way, Ikeja",
+        "address": "Ogba, Lagos",
         "phone": "08012345679",
     },
     {
