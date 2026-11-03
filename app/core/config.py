@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg2://elizade:elizade@localhost:5432/elizade_connect"
     jwt_secret: str = "dev-secret"
     jwt_expire_minutes: int = 10080  # 7 days
-    admin_email: str = "divinewilson766@gmail.com"
+    admin_email: str = "allieric28@gmail.com"
     #: Refresh tokens outlive access tokens by design: the access token is
     #: the thing sent on every request, the refresh token only on renewal.
     refresh_token_expire_days: int = 60
