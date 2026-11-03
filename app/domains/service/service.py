@@ -21,6 +21,7 @@ from app.domains.service.models import (
     ServiceInvoiceLineItem,
     ServiceItem,
     ServiceJob,
+    ServiceOfferingSettings,
     ServiceJobStage,
 )
 from app.domains.notifications import catalog
@@ -49,6 +50,8 @@ from app.domains.service.schemas import (
     ServiceItemCreateIn,
     ServiceItemOut,
     ServiceItemUpdateIn,
+    ServiceOfferingOut,
+    ServiceOfferingUpdateIn,
     ServiceStatsOut,
     StageUpdateIn,
 )
@@ -723,6 +726,33 @@ def list_customer_appointments(db: Session, customer_id: str) -> list[CustomerAp
     return [CustomerAppointmentListItemOut.from_model(a) for a in rows]
 
 
+def get_or_create_offering_settings(db: Session) -> ServiceOfferingSettings:
+    row = db.query(ServiceOfferingSettings).order_by(ServiceOfferingSettings.updated_at.desc()).first()
+    if row is not None:
+        return row
+    row = ServiceOfferingSettings()
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def get_offering_settings(db: Session) -> ServiceOfferingOut:
+    row = get_or_create_offering_settings(db)
+    return ServiceOfferingOut(recallBookingEnabled=row.recall_booking_enabled)
+
+
+def update_offering_settings(
+    db: Session, payload: ServiceOfferingUpdateIn, *, actor: User
+) -> ServiceOfferingOut:
+    row = get_or_create_offering_settings(db)
+    row.recall_booking_enabled = payload.recallBookingEnabled
+    row.updated_by_id = actor.id
+    db.commit()
+    db.refresh(row)
+    return ServiceOfferingOut(recallBookingEnabled=row.recall_booking_enabled)
+
+
 def create_customer_appointment(
     db: Session, user: User, payload: CustomerAppointmentCreateIn
 ) -> CustomerAppointmentListItemOut:
@@ -745,6 +775,9 @@ def create_customer_appointment(
         service_type = ServiceType(payload.service_type.strip().lower())
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid service type") from exc
+
+    if service_type == ServiceType.recall and not get_or_create_offering_settings(db).recall_booking_enabled:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Recall service is not available")
 
     scheduled = _future_datetime(payload.scheduled_at)
     _ensure_vehicle_slot_available(db, vehicle_id=vehicle.id, scheduled_at=scheduled)

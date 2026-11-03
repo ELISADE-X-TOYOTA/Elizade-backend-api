@@ -39,6 +39,7 @@ from app.domains.service.models import (
     ServiceItem,
     ServiceJob,
     ServiceJobStage,
+    ServiceOfferingSettings,
     ServicePriceBookEntry,
     ServicePriceBookVersion,
 )
@@ -78,6 +79,7 @@ __all__ = [
     "ServiceInvoiceLineItem",
     "ServiceJob",
     "ServiceJobStage",
+    "ServiceOfferingSettings",
     "AdditionalWorkRequest",
     "SlaConfig",
     "SupportTicket",

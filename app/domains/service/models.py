@@ -377,6 +377,20 @@ class ServiceBoardSettings(Base):
     updated_by_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=True)
 
 
+class ServiceOfferingSettings(Base):
+    """Which service types a customer may book. One row for the whole company."""
+
+    __tablename__ = "service_offering_settings"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    #: Recall stays bookable until an admin turns it off, matching the app today.
+    recall_booking_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    updated_by_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=True)
+
+
 class ServiceInterval(Base):
     """Admin-configured maintenance interval for a catalogue item (optionally per board model)."""
 

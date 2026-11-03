@@ -24,6 +24,8 @@ from app.domains.service.schemas import (
     ServiceItemCreateIn,
     ServiceItemOut,
     ServiceItemUpdateIn,
+    ServiceOfferingOut,
+    ServiceOfferingUpdateIn,
     ServiceStatsOut,
     StageUpdateIn,
 )
@@ -52,6 +54,20 @@ router = APIRouter(prefix="/admin/service", tags=["admin-service"])
 @router.get("/stats", response_model=ServiceStatsOut)
 def get_stats(_: StaffPortalUser, db: Session = Depends(get_db)) -> ServiceStatsOut:
     return service.get_stats(db)
+
+
+@router.get("/offerings", response_model=ServiceOfferingOut)
+def get_offerings(_: StaffPortalUser, db: Session = Depends(get_db)) -> ServiceOfferingOut:
+    return service.get_offering_settings(db)
+
+
+@router.patch("/offerings", response_model=ServiceOfferingOut)
+def update_offerings(
+    payload: ServiceOfferingUpdateIn,
+    current_user: CurrentAdmin,
+    db: Session = Depends(get_db),
+) -> ServiceOfferingOut:
+    return service.update_offering_settings(db, payload, actor=current_user)
 
 
 # --------------------------------------------------------------------------- #

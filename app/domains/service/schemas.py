@@ -19,6 +19,16 @@ def _vehicle_label(vehicle) -> str:
 # Stats                                                                       #
 # --------------------------------------------------------------------------- #
 
+class ServiceOfferingOut(BaseModel):
+    """Which service types customers are allowed to book."""
+
+    recallBookingEnabled: bool
+
+
+class ServiceOfferingUpdateIn(BaseModel):
+    recallBookingEnabled: bool
+
+
 class ServiceStatsOut(BaseModel):
     """KPI tiles for the daily Service Operations board (today-scoped)."""
 

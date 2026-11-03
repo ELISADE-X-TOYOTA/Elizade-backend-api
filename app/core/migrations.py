@@ -30,6 +30,7 @@ def run_startup_migrations(engine: Engine) -> None:
     _create_service_price_book_tables(engine)
     _create_service_maintenance_tables(engine)
     _add_service_appointment_attachments(engine)
+    _create_service_offering_settings(engine)
 
 
 def _add_lead_customer_tracking(engine: Engine) -> None:
@@ -242,6 +243,18 @@ def _create_service_price_book_tables(engine: Engine) -> None:
     ServiceBoardVehicleModel.__table__.create(bind=engine, checkfirst=True)
     ServicePriceBookVersion.__table__.create(bind=engine, checkfirst=True)
     ServicePriceBookEntry.__table__.create(bind=engine, checkfirst=True)
+
+
+def _create_service_offering_settings(engine: Engine) -> None:
+    """Customer-facing on/off for recall booking.
+
+    `create_all` only builds missing tables on a fresh database. An existing
+    deployment needs this row's table created on startup, the same way the
+    service-board settings table is.
+    """
+    from app.domains.service.models import ServiceOfferingSettings  # noqa: PLC0415
+
+    ServiceOfferingSettings.__table__.create(bind=engine, checkfirst=True)
 
 
 def _create_service_maintenance_tables(engine: Engine) -> None:

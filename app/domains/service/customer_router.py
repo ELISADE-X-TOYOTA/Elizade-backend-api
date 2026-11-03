@@ -12,10 +12,17 @@ from app.domains.service.schemas import (
     CustomerServiceTrackOut,
     JobDetailOut,
     PaginatedHistoryOut,
+    ServiceOfferingOut,
 )
 from app.domains.ownership.schemas import DocumentUploadOut
 
 router = APIRouter(prefix="/service", tags=["customer-service"])
+
+
+@router.get("/offerings", response_model=ServiceOfferingOut)
+def get_offerings(db: Session = Depends(get_db)) -> ServiceOfferingOut:
+    """Public so the booking screen can hide Recall before the customer is signed in."""
+    return service.get_offering_settings(db)
 
 
 @router.get("/appointments", response_model=list[CustomerAppointmentListItemOut])
