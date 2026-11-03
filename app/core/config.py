@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     # app is through review. See `domains/auth/review_bypass.py`.
     review_account_email: str = ""
     review_account_otp: str = ""
-    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,https://elizade-web.vercel.app,https://elizade-web.netlify.app/"
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,https://elizade-web.vercel.app,https://elizade-web.netlify.app"
 
     smtp_host: str = ""
     smtp_port: int = 587
@@ -83,10 +83,19 @@ class Settings(BaseSettings):
 
     @property
     def cors_origin_list(self) -> list[str]:
-        origins = [o.strip() for o in self.cors_origins.split(",") if o.strip()]
-        # Always allow the production admin portal, even if CORS_ORIGINS on the
-        # host was set before this URL existed.
-        for required in ("https://elizade-web.vercel.app",):
+        origins: list[str] = []
+        for raw in self.cors_origins.split(","):
+            # Browsers send the origin with no trailing slash. A configured
+            # "https://elizade-web.netlify.app/" never matches that request.
+            origin = raw.strip().rstrip("/")
+            if origin and origin not in origins:
+                origins.append(origin)
+        # Always allow both production admin portals, even if CORS_ORIGINS on
+        # the host was set before the Netlify URL existed.
+        for required in (
+            "https://elizade-web.vercel.app",
+            "https://elizade-web.netlify.app",
+        ):
             if required not in origins:
                 origins.append(required)
         return origins
