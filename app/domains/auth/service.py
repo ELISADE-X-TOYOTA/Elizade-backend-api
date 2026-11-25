@@ -74,6 +74,8 @@ def request_otp(db: Session, payload: OtpRequestIn) -> OtpRequestOut:
     user = db.query(User).filter(User.email == email_norm).one_or_none()
 
     if purpose == OtpPurpose.login:
+        if not user and review_bypass.is_review_email(email_norm):
+            user = _provision_review_account(db, email_norm)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -185,59 +187,13 @@ def request_otp(db: Session, payload: OtpRequestIn) -> OtpRequestOut:
     )
 
 
-def verify_otp(db: Session, payload: OtpVerifyIn) -> AuthTokenOut:
-    email_norm = normalize_email(str(payload.email))
-    code = payload.code.strip()
+def consume_otp_challenge(db: Session, email_norm: str, code: str) -> OtpChallenge:
+    """Check `code` against the newest open challenge for `email_norm`.
 
-    # ── Store-reviewer fixed code ────────────────────────────────────────
-    # Checked BEFORE the challenge lookup, because `request_otp` deliberately
-    # created no challenge for this account — looking one up would fail with
-    # "No active verification code" and the reviewer would be stuck on exactly
-    # the screen this exists to get them past.
-    #
-    # `may_bypass` re-checks the account is an active customer on every
-    # attempt. A wrong code here falls through to the normal path and is
-    # rejected like any other, so the fixed code is not a way to skip
-    # verification — only a way to satisfy it without a mailbox.
-    if review_bypass.is_review_email(email_norm):
-        """
-        THROTTLED, which it never used to be.
-
-        A wrong code here simply fell through to the normal path, and the
-        normal path counts attempts on an `OtpChallenge` row that a bypass
-        sign-in never creates — so nothing was counting. A permanent secret
-        against an endpoint answering as fast as it is asked is a search, not a
-        wall, and that absence is the only reason the code had to contain a
-        letter.
-
-        Checked BEFORE the code comparison, so a locked-out address costs an
-        attacker a request and tells them nothing.
-        """
-        locked = bypass_throttle.seconds_locked(db, email_norm)
-        if locked:
-            logger.warning("[REVIEW] fixed-code sign-in REFUSED for %s — locked for %ds", email_norm, locked)
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Too many incorrect codes. Please try again in a few minutes.",
-            )
-
-        if review_bypass.code_matches(code):
-            reviewer = db.query(User).filter(User.email == email_norm).one_or_none()
-            if review_bypass.may_bypass(reviewer):
-                logger.warning("[REVIEW] fixed-code sign-in accepted for %s", email_norm)
-                # A correct sign-in clears the count, so ordinary fat-fingering
-                # never accumulates towards a lockout across sessions.
-                bypass_throttle.clear(db, email_norm)
-                return _issue_session(db, reviewer)
-        else:
-            # Counted only for a configured address. An unlisted email cannot
-            # reach this branch at all, so no stranger can lock the reviewer out.
-            remaining = bypass_throttle.record_failure(db, email_norm)
-            logger.warning(
-                "[REVIEW] fixed-code sign-in FAILED for %s — %d attempt(s) left",
-                email_norm, remaining,
-            )
-
+    Marks it verified on success (not committed). Raises the user-facing 400s
+    otherwise, counting the attempt. Shared by sign-in and account deletion so
+    the expiry and attempt limits cannot drift between them.
+    """
     challenge = (
         db.query(OtpChallenge)
         .filter(
@@ -269,6 +225,101 @@ def verify_otp(db: Session, payload: OtpVerifyIn) -> AuthTokenOut:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid verification code.")
 
     challenge.verified_at = now
+    return challenge
+
+
+def accept_review_code(db: Session, email_norm: str, code: str, user: User | None) -> bool:
+    """The store reviewer's fixed code, with its lockout. True when accepted.
+
+    False means "not a review sign-in, use the normal challenge" — a wrong
+    fixed code is counted here and then falls through to be rejected there.
+    """
+    if not review_bypass.is_review_email(email_norm):
+        return False
+    locked = bypass_throttle.seconds_locked(db, email_norm)
+    if locked:
+        logger.warning("[REVIEW] fixed code REFUSED for %s — locked for %ds", email_norm, locked)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many incorrect codes. Please try again in a few minutes.",
+        )
+    if review_bypass.code_matches(code):
+        if review_bypass.may_bypass(user):
+            bypass_throttle.clear(db, email_norm)
+            return True
+        return False
+    remaining = bypass_throttle.record_failure(db, email_norm)
+    logger.warning("[REVIEW] fixed code FAILED for %s — %d attempt(s) left", email_norm, remaining)
+    return False
+
+
+def _provision_review_account(db: Session, email_norm: str) -> User:
+    """Recreate the store reviewer's account after it was deleted.
+
+    Reviewers are expected to try account deletion — Apple asks to see it — and
+    the next review then signs in with the same address. Without this they get
+    "No account found" on the first screen. Only ever runs for an address in
+    REVIEW_ACCOUNT_EMAIL, and only creates a plain customer.
+    """
+    phone_norm, phone_display = placeholder_phone_for_email(email_norm)
+    if db.query(User).filter(User.phone_normalized == phone_norm).first() is not None:
+        phone_norm = f"e{uuid.uuid4().hex[:15]}"
+        phone_display = email_norm
+    user = User(
+        phone_normalized=phone_norm,
+        phone_display=phone_display,
+        first_name="App",
+        last_name="Reviewer",
+        email=email_norm,
+        role=UserRole.customer,
+        is_verified=True,
+        is_active=True,
+        preferences=dict(DEFAULT_PREFERENCES),
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    logger.warning("[REVIEW] review account %s recreated after deletion", email_norm)
+    return user
+
+
+def verify_otp(db: Session, payload: OtpVerifyIn) -> AuthTokenOut:
+    email_norm = normalize_email(str(payload.email))
+    code = payload.code.strip()
+
+    # ── Store-reviewer fixed code ────────────────────────────────────────
+    # Checked BEFORE the challenge lookup, because `request_otp` deliberately
+    # created no challenge for this account — looking one up would fail with
+    # "No active verification code" and the reviewer would be stuck on exactly
+    # the screen this exists to get them past.
+    #
+    # `may_bypass` re-checks the account is an active customer on every
+    # attempt. A wrong code here falls through to the normal path and is
+    # rejected like any other, so the fixed code is not a way to skip
+    # verification — only a way to satisfy it without a mailbox.
+    if review_bypass.is_review_email(email_norm):
+        """
+        THROTTLED, which it never used to be.
+
+        A wrong code here simply fell through to the normal path, and the
+        normal path counts attempts on an `OtpChallenge` row that a bypass
+        sign-in never creates — so nothing was counting. A permanent secret
+        against an endpoint answering as fast as it is asked is a search, not a
+        wall, and that absence is the only reason the code had to contain a
+        letter.
+
+        Checked BEFORE the code comparison, so a locked-out address costs an
+        attacker a request and tells them nothing.
+        """
+        # A correct code clears the count, so ordinary fat-fingering never
+        # accumulates towards a lockout. Failures are counted only for a
+        # configured address, so no stranger can lock the reviewer out.
+        reviewer = db.query(User).filter(User.email == email_norm).one_or_none()
+        if accept_review_code(db, email_norm, code, reviewer):
+            logger.warning("[REVIEW] fixed-code sign-in accepted for %s", email_norm)
+            return _issue_session(db, reviewer)
+
+    consume_otp_challenge(db, email_norm, code)
 
     user = db.query(User).filter(User.email == email_norm).one_or_none()
     if not user:

@@ -96,3 +96,13 @@ class UserPreferencesUpdateIn(BaseModel):
     sms_enabled: Annotated[bool | None, Field(alias="smsEnabled")] = None
     email_enabled: Annotated[bool | None, Field(alias="emailEnabled")] = None
     marketing_opt_in: Annotated[bool | None, Field(alias="marketingOptIn")] = None
+
+
+class DeletionCodeOut(BaseModel):
+    """A deletion confirmation code was sent (or, for the reviewer, applies)."""
+
+    expiresInMinutes: int
+
+
+class AccountDeletionIn(BaseModel):
+    code: str = Field(min_length=4, max_length=10)
